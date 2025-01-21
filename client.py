@@ -71,6 +71,9 @@ def main():
         if not ret:
             break
 
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # Convert to RGB format if needed
+        frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+
         frame_data = pickle.dumps(frame)
 
 
