@@ -35,7 +35,6 @@ def receive_video(sock):
             packed_msg_size = data[:payload_size]
             data = data[payload_size:]
             msg_size = struct.unpack("Q", packed_msg_size)[0]
-
             while len(data) < msg_size:
                 data += sock.recv(4*1024) # 4k again
 
@@ -45,6 +44,9 @@ def receive_video(sock):
             # Display the video frame
 
             frame = pickle.loads(frame_data)
+
+
+
             cv2.imshow('Client', frame)
 
 
@@ -70,6 +72,9 @@ def main():
             break
 
         frame_data = pickle.dumps(frame)
+
+
+
         sock.sendall(struct.pack("Q", len(frame_data)))
         sock.sendall(frame_data)
 
