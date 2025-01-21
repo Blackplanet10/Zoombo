@@ -1,7 +1,12 @@
+
+import pickle
+import struct
+
 import cv2
 import socket
 import threading
 import numpy as np
+
 
 # Server Configuration
 SERVER_HOST = '127.0.0.1'
@@ -12,21 +17,37 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
 def receive_video(sock):
+
+    data = b""
+    payload_size = struct.calcsize("Q")
     while True:
         try:
-            data = sock.recv(1024)
+
+            while len(data) < payload_size:
+                packet = sock.recv(4 * 1024)  # 4k buffer
+                if not packet:
+                    break
+                data += packet
             if not data:
                 break
 
             # Reconstruct frame from data
-            nparr = np.frombuffer(data, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            packed_msg_size = data[:payload_size]
+            data = data[payload_size:]
+            msg_size = struct.unpack("Q", packed_msg_size)[0]
+
+            while len(data) < msg_size:
+                data += sock.recv(4*1024) # 4k again
+
+            frame_data = data[:msg_size]
+            data = data[msg_size:]
 
             # Display the video frame
-            if frame is not None:
-                cv2.imshow("Other Client", frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+
+            frame = pickle.loads(frame_data)
+            cv2.imshow('Client', frame)
+
+
         except Exception as e:
             print(f"Error receiving video: {e}")
             break
@@ -48,9 +69,10 @@ def main():
         if not ret:
             break
 
-        # Encode frame
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
-        sock.sendall(buffer)
+        frame_data = pickle.dumps(frame)
+        sock.sendall(struct.pack("Q", len(frame_data)))
+        sock.sendall(frame_data)
+
 
         # Display own video
         cv2.imshow("Your Video", frame)

@@ -7,11 +7,17 @@ PORT = 5000
 
 clients = []
 
-def handle_client(client_socket, client_address):
-    other_client = clients[1] if clients[0] == client_socket else clients[0]
 
+def handle_client(client_socket, client_address):
     while True:
         try:
+            # Wait for another client to connect
+            if len(clients) < 2:
+                continue  # Wait until another client is available
+
+            # Determine the other client
+            other_client = clients[1] if clients[0] == client_socket else clients[0]
+
             # Receive video data from one client and send to the other
             data = client_socket.recv(1024)
             if not data:
@@ -22,6 +28,7 @@ def handle_client(client_socket, client_address):
             print(f"Error handling client {client_address}: {e}")
             break
 
+    # Remove the client and close the connection
     clients.remove(client_socket)
     client_socket.close()
 
