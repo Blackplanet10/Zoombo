@@ -4,6 +4,7 @@ import cv2
 import socket
 import threading
 import numpy as np
+import time
 
 # Server Configuration
 SERVER_HOST = '127.0.0.1'
@@ -14,6 +15,10 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 SELF_FRAME_WIDTH = 256
 SELF_FRAME_HEIGHT = 192
+
+TARGET_FPS = 15
+
+
 
 
 def receive_video(sock):
@@ -68,30 +73,40 @@ def main():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
+    last_frame_time = time.time()
+    frame_delay = 1 / TARGET_FPS
+
     while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            print("Failed to capture frame from webcam.")
-            break
 
-        # Resize and encode frame
-        frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
-        frame_self = cv2.resize(frame, (SELF_FRAME_WIDTH, SELF_FRAME_HEIGHT))
+        current_time = time.time()
 
-        frame_data = pickle.dumps(frame)
+        # Only process frames when the target frame interval has passed
+        if current_time - last_frame_time >= frame_delay:
+            last_frame_time = current_time
 
-        # Send frame
-        try:
-            sock.sendall(struct.pack("Q", len(frame_data)))
-            sock.sendall(frame_data)
-        except Exception as e:
-            print(f"Error sending video: {e}")
-            break
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to capture frame from webcam.")
+                break
 
-        # Display own video
-        cv2.imshow("Your Video", frame_self)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            # Resize and encode frame
+            frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
+            frame_self = cv2.resize(frame, (SELF_FRAME_WIDTH, SELF_FRAME_HEIGHT))
+
+            frame_data = pickle.dumps(frame)
+
+            # Send frame
+            try:
+                sock.sendall(struct.pack("Q", len(frame_data)))
+                sock.sendall(frame_data)
+            except Exception as e:
+                print(f"Error sending video: {e}")
+                break
+
+            # Display own video
+            cv2.imshow("Your Video", frame_self)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
     cap.release()
     sock.close()
