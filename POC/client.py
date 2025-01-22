@@ -19,8 +19,6 @@ SELF_FRAME_HEIGHT = 192
 TARGET_FPS = 15
 
 
-
-
 def receive_video(sock):
     data = b""
     payload_size = struct.calcsize("Q")
