@@ -18,6 +18,8 @@ SELF_FRAME_HEIGHT = 192
 
 TARGET_FPS = 15
 
+JPEG_QUALITY = 30  # Compression level (lower = more compression, 40 is a good balance)
+
 
 def receive_video(sock):
     data = b""
@@ -44,9 +46,9 @@ def receive_video(sock):
             data = data[msg_size:]
 
             # Deserialize and display frame
-            frame = pickle.loads(frame_data)
+            frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
 
-            if isinstance(frame, np.ndarray):
+            if frame is not None:
                 cv2.imshow("Received Video", frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
@@ -91,7 +93,8 @@ def main():
             frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
             frame_self = cv2.resize(frame, (SELF_FRAME_WIDTH, SELF_FRAME_HEIGHT))
 
-            frame_data = pickle.dumps(frame)
+            _, compressed_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+            frame_data = compressed_frame.tobytes()  # Convert to byte format
 
             # Send frame
             try:

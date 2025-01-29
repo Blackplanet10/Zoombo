@@ -54,7 +54,8 @@ def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
     server.listen(2)
-    print(f"Server listening on {HOST}:{PORT}")
+    print(f"Server listening on {socket.gethostbyname(socket.gethostname())}:{PORT}")
+    # print("Connect to ip "+ socket.gethostbyname(socket.gethostname()))
 
     while True:
         client_socket, client_address = server.accept()
