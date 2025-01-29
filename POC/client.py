@@ -14,8 +14,8 @@ SERVER_PORT = 5000
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
-PIP_WIDTH = 160  # Picture-in-Picture (your video) width
-PIP_HEIGHT = 120  # Picture-in-Picture height
+PIP_WIDTH = 180  # Picture-in-Picture (your video) width
+PIP_HEIGHT = 135  # Picture-in-Picture height
 
 TARGET_FPS = 15
 
@@ -114,8 +114,8 @@ def main():
                 break
 
 
-            x_offset = 20  # 20px margin from right
-            y_offset = 20  # 20px margin from bottom
+            x_offset = FRAME_WIDTH - PIP_WIDTH - 20  # 20px margin from right
+            y_offset = 20  # 20px margin from top
 
             background = partner_frame.copy()
             background[y_offset:y_offset + PIP_HEIGHT, x_offset:x_offset + PIP_WIDTH] = small_frame
