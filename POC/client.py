@@ -13,15 +13,22 @@ SERVER_PORT = 5000
 # Frame settings
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-SELF_FRAME_WIDTH = 256
-SELF_FRAME_HEIGHT = 192
+
+PIP_WIDTH = 160  # Picture-in-Picture (your video) width
+PIP_HEIGHT = 120  # Picture-in-Picture height
 
 TARGET_FPS = 15
 
 JPEG_QUALITY = 30  # Compression level (lower = more compression, 40 is a good balance)
 
+empty_frame = np.zeros((FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.uint8)
+
+# Variable to store the last received partner frame
+partner_frame = empty_frame.copy()
+
 
 def receive_video(sock):
+    global partner_frame
     data = b""
     payload_size = struct.calcsize("Q")
     while True:
@@ -49,7 +56,7 @@ def receive_video(sock):
             frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
 
             if frame is not None:
-                cv2.imshow("Received Video", frame)
+                partner_frame = frame  # Update global variable
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
             else:
@@ -63,6 +70,7 @@ def receive_video(sock):
 
 
 def main():
+    global partner_frame
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((SERVER_HOST, SERVER_PORT))
     print(f"Connected to server at {SERVER_HOST}:{SERVER_PORT}")
@@ -91,7 +99,8 @@ def main():
 
             # Resize and encode frame
             frame = cv2.resize(frame, (FRAME_WIDTH, FRAME_HEIGHT))
-            frame_self = cv2.resize(frame, (SELF_FRAME_WIDTH, SELF_FRAME_HEIGHT))
+            small_frame = cv2.resize(frame, (PIP_WIDTH, PIP_HEIGHT))
+
 
             _, compressed_frame = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
             frame_data = compressed_frame.tobytes()  # Convert to byte format
@@ -104,8 +113,15 @@ def main():
                 print(f"Error sending video: {e}")
                 break
 
-            # Display own video
-            cv2.imshow("Your Video", frame_self)
+
+            x_offset = 20  # 20px margin from right
+            y_offset = 20  # 20px margin from bottom
+
+            background = partner_frame.copy()
+            background[y_offset:y_offset + PIP_HEIGHT, x_offset:x_offset + PIP_WIDTH] = small_frame
+
+            #Display combined frame
+            cv2.imshow("Video Chat", background)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
