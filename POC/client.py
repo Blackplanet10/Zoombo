@@ -70,6 +70,7 @@ def receive_video(sock):
 
 
 def main():
+
     global partner_frame
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.connect((SERVER_HOST, SERVER_PORT))
