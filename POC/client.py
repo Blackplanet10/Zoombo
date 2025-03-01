@@ -6,6 +6,9 @@ import threading
 import numpy as np
 import time
 
+
+import packet_structure
+
 # Server Configuration
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 5000

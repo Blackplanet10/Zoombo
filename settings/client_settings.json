@@ -1,0 +1,6 @@
+{
+  "TARGET_FPS": 15,
+  "FRAME_WIDTH": 640,
+  "FRAME_HEIGHT": 480,
+  "JPEG_QUALITY": 30
+}
