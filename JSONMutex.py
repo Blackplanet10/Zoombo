@@ -1,9 +1,12 @@
 import json
 import os
-import fcntl  # For Unix-based systems
 import asyncio
 from contextlib import asynccontextmanager
 
+if os.name == 'posix':
+    import fcntl
+elif os.name == 'nt':
+    import msvcrt
 
 class JSONMutex:
     def __init__(self, file_path: str):
@@ -14,11 +17,21 @@ class JSONMutex:
     async def lock(self):
         """Async context manager for acquiring and releasing the file lock."""
         with open(self.lock_file, 'w') as lockfile:
-            fcntl.flock(lockfile, fcntl.LOCK_EX)  # Acquire an exclusive lock
+            if os.name == 'nt':
+                # Ensure the file has at least one byte for locking.
+                lockfile.write("0")
+                lockfile.flush()
+                # Lock 1 byte from the beginning of the file.
+                msvcrt.locking(lockfile.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                fcntl.flock(lockfile, fcntl.LOCK_EX)
             try:
-                yield  # Perform operations inside this block
+                yield  # Operations inside the lock.
             finally:
-                fcntl.flock(lockfile, fcntl.LOCK_UN)  # Release the lock
+                if os.name == 'nt':
+                    msvcrt.locking(lockfile.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(lockfile, fcntl.LOCK_UN)
 
     async def read_json(self):
         """Read the JSON file safely, retrying until data is available."""
@@ -26,10 +39,13 @@ class JSONMutex:
             async with self.lock():
                 if os.path.exists(self.file_path):
                     with open(self.file_path, 'r') as f:
-                        data = json.load(f)
+                        try:
+                            data = json.load(f)
+                        except json.JSONDecodeError:
+                            data = None
                         if data:
                             return data
-            await asyncio.sleep(1)  # Non-blocking wait before retrying
+            await asyncio.sleep(0.1)  # Non-blocking wait before retrying
 
     async def write_json(self, data):
         """Write data to the JSON file safely, retrying until successful."""
@@ -41,20 +57,14 @@ class JSONMutex:
                     return  # Exit once writing is successful
             except Exception as e:
                 print(f"Write failed, retrying: {e}")
-                await asyncio.sleep(1)  # Non-blocking wait before retrying
-
+                await asyncio.sleep(0.1)  # Non-blocking wait before retrying
 
 # Example usage
 async def main():
     json_mutex = JSONMutex("data.json")
-
-    # Writing safely with retries
     new_data = {"count": 1}
     await json_mutex.write_json(new_data)
-
-    # Reading safely until data is available
     print(await json_mutex.read_json())
-
 
 if __name__ == "__main__":
     asyncio.run(main())

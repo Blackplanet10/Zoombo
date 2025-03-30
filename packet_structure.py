@@ -1,7 +1,5 @@
 # module to build packets using tamplate
 
-
-
 class ClientPacketStructure:
     def VidAud(vid:bytes, aud:bytes):
 
@@ -17,6 +15,12 @@ class ClientPacketStructure:
         request = f"203"
         return str.encode(request)
 
+    @staticmethod
+    def Handshake(name: str, client_public: int):
+        # Format: "200,handshake,<name>,<client_public>"
+        return str.encode(f"200,handshake,{name},{client_public}")
+
+
 class ServerPacketStructure:
     def VidAud(user_id,vid: bytes, aud: bytes):
         vid_len = f"{(9 - len(vid)) * '0'}{vid}"
@@ -28,13 +32,19 @@ class ServerPacketStructure:
 
         return str.encode(reqeust)
 
+    @staticmethod
+    def HandshakeResponse(user_id, server_public: int):
+        # Format: "300,<user_id>,handshake_ack,<server_public>"
+        user_id_str = str(user_id)
+        user_id_str = f"{(3 - len(user_id_str)) * '0'}{user_id_str}"
+        return str.encode(f"300,{user_id_str},handshake_ack,{server_public}")
 
 
 CODES ={
     #200 client codes
     201: "Video and Audio",
     202: "Text Message",
-    202: "Request settings File",
+    203: "Request settings File",
 
 
 
