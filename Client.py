@@ -16,6 +16,7 @@ import random
 
 from PyQt5 import QtWidgets
 from GUI.welcome import Ui_welcome  # Adjust the import as needed
+from GUI.home import Ui_home  # Adjust the import as needed
 import packet_structure as pst
 
 # Diffie–Hellman public parameters (for demonstration only)
@@ -84,6 +85,15 @@ def connect_to_server(name: str):
         print("Error connecting to server:", e)
         return None, None
 
+class HomeWindow(QtWidgets.QMainWindow):
+    def __init__(self,sock, shared_key):
+        super().__init__()
+        self.sock = sock
+        self.shared_key = shared_key
+        self.ui = Ui_home()
+        self.ui.setupUi(self)
+
+
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -116,9 +126,20 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sock = sock
             self.shared_key = shared_key
             print("Encrypted handshake successful; connection established.")
+            self.open_home_window()
             # Continue with further communication using self.shared_key for symmetric encryption.
         else:
             print("Handshake failed.")
+
+    def open_home_window(self):
+        # Create an instance of the ChatWindow passing the connection info.
+        self.home_window = HomeWindow(self.sock, self.shared_key)
+        print("opened widnow")
+        # Show the new window.
+        self.home_window.show()
+        print("opened widnow")
+        # Hide the current welcome window.
+        self.hide()
 
 
 def main():

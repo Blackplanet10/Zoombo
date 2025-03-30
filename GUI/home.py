@@ -26,7 +26,7 @@ class Ui_home(object):
         self.logo = QtWidgets.QLabel(self.centralwidget)
         self.logo.setGeometry(QtCore.QRect(10, 0, 351, 71))
         self.logo.setText("")
-        self.logo.setPixmap(QtGui.QPixmap("C:\\Users\\oriro\\Desktop\\Zoombo\\LOGO/logo no bg.png"))
+        self.logo.setPixmap(QtGui.QPixmap("imgs/logo no bg.png"))
         self.logo.setScaledContents(True)
         self.logo.setObjectName("logo")
         self.label = QtWidgets.QLabel(self.centralwidget)
