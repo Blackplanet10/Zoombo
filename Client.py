@@ -14,6 +14,7 @@ import socket
 import threading
 import random
 
+from PyQt5.QtCore import QTimer
 from PyQt5 import QtWidgets
 from GUI.welcome import Ui_welcome  # Adjust the import as needed
 from GUI.home import Ui_home  # Adjust the import as needed
@@ -94,7 +95,6 @@ class HomeWindow(QtWidgets.QMainWindow):
         self.ui.setupUi(self)
 
 
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -126,8 +126,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.sock = sock
             self.shared_key = shared_key
             print("Encrypted handshake successful; connection established.")
-            self.open_home_window()
-            # Continue with further communication using self.shared_key for symmetric encryption.
+            # Schedule open_home_window to be called in the main thread
+            QTimer.singleShot(0, self.open_home_window)
         else:
             print("Handshake failed.")
 
