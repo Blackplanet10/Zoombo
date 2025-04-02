@@ -125,7 +125,7 @@ class Ui_welcome(object):
         self.horizontalLayout.addItem(spacerItem)
         self.logo = QtWidgets.QLabel(self.horizontalLayoutWidget)
         self.logo.setText("")
-        self.logo.setPixmap(QtGui.QPixmap(r'C:\Users\User\PycharmProjects\Zoombo2\GUI\imgs\logo no bg.png'))
+        self.logo.setPixmap(QtGui.QPixmap(r'GUI\imgs\logo no bg.png'))
         self.logo.setScaledContents(True)
         self.logo.setObjectName("logo")
         self.horizontalLayout.addWidget(self.logo)
