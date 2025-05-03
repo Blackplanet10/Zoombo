@@ -24,6 +24,11 @@ class Ui_MainWindow(object):
         self.horizontalLayout.setContentsMargins(0, 0, 0, 0)
         self.horizontalLayout.setObjectName("horizontalLayout")
 
+        self.roomCount = QtWidgets.QLabel("Participants: 1", self.room_window)
+        self.roomCount.setStyleSheet("color:white; font: 16pt 'Cascadia';")
+        self.roomCount.move(30, 20)  # tweak position to taste
+        self.roomCount.show()
+
         self.logo = QtWidgets.QLabel(self.horizontalLayoutWidget)
         self.logo.setMaximumSize(QtCore.QSize(540, 120))
         self.logo.setText("")

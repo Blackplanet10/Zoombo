@@ -39,3 +39,10 @@ class RoomManager:
             code = "".join(random.choices(string.ascii_uppercase + string.digits, k=k))
             if code not in self._rooms:
                 return code
+
+    def leave_room(self, code: str, user):
+        with self._lock:
+            if code in self._rooms and user in self._rooms[code]:
+                self._rooms[code].remove(user)
+                if not self._rooms[code]:  # auto‑delete empty rooms
+                    del self._rooms[code]

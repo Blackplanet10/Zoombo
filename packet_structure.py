@@ -53,6 +53,9 @@ class ServerPacketStructure:
     def JoinAck(code: str):  # 305
         return f"305,join_ack,{code}".encode()
 
+    @staticmethod
+    def RoomSize(size: int) -> bytes:  # 306
+        return f"306,room_size,{size}".encode()
 
 CODES = {
     #200 client codes
@@ -67,7 +70,8 @@ CODES = {
     302: "User ID, Text Message",
     303: "Send settings File",
     304: "Room created (code)",
-    305: "Joined room ack"
+    305: "Joined room ack",
+    306: "Room size update"
 
     #400 codes for both server and client
 

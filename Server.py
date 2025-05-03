@@ -19,6 +19,14 @@ clients = []
 rooms = RoomManager()
 sockets = {}                    # socket → {"user":User, "room":str}
 
+def broadcast_room_size(room_code: str):
+    count = len(rooms.members(room_code))
+    pkt   = pst.ServerPacketStructure.RoomSize(count)
+    envelope = struct.pack("Q", len(pkt)) + pkt
+    for s, meta in sockets.items():
+        if meta["room"] == room_code:
+            s.sendall(envelope)
+
 
 def handle_client(client_socket):
     try:
@@ -71,7 +79,7 @@ def handle_client(client_socket):
             print("Expected handshake but got:", handshake_data)
             return
 
-        
+
 
         # ---------------- main recv loop ---------------- #
 
@@ -98,6 +106,7 @@ def handle_client(client_socket):
             if data.startswith(b"204"):  # create room
                 code = rooms.create_room(user)
                 sockets[client_socket]["room"] = code
+                broadcast_room_size(code)
                 reply = pst.ServerPacketStructure.RoomCreated(code)
                 client_socket.sendall(struct.pack("Q", len(reply)) + reply)
 
@@ -105,10 +114,11 @@ def handle_client(client_socket):
                 code = data.decode().split(',')[2]
                 if rooms.join_room(code, user):
                     sockets[client_socket]["room"] = code
+                    broadcast_room_size(code)
                     reply = pst.ServerPacketStructure.JoinAck(code)
                 else:
                     reply = b"405,join_error"
-                    client_socket.sendall(struct.pack("Q", len(reply)) + reply)
+                client_socket.sendall(struct.pack("Q", len(reply)) + reply)
 
             elif data.startswith(b"201"):  # video+audio
                 header_str, payload = data.split(b',', 3)[0:3], data.split(b',', 3)[3]
@@ -133,16 +143,23 @@ def handle_client(client_socket):
     except Exception as e:
         print("Error handling client:", e)
     finally:
+        meta = sockets.pop(client_socket, None)
+        if meta and meta["room"]:
+            rooms.leave_room(meta["room"], meta["user"])
+            broadcast_room_size(meta["room"])
         if client_socket in clients:
             clients.remove(client_socket)
         client_socket.close()
+
 
 
 def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
     server.listen(5)
-    print(f"Server listening on {HOST}:{PORT}")
+    # print(f"Server listening on {HOST}:{PORT}")
+    print(f"Server listening on {socket.gethostbyname(socket.gethostname())}:{PORT}")
+
 
     while True:
         client_socket, client_address = server.accept()
