@@ -168,7 +168,7 @@ class Ui_welcome(object):
         self.connectButton.setText(_translate("welcome", "Connect"))
         self.quitButton.setText(_translate("welcome", "Quit"))
         self.Name.setPlaceholderText(_translate("welcome", "Name"))
-        self.warning.setText(_translate("welcome", "WARNING"))
+        self.warning.setText(_translate("warning", ""))
 
 
 if __name__ == "__main__":

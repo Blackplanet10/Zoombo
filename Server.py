@@ -7,6 +7,7 @@ import random
 
 import packet_structure as pst
 from User import User  # Ensure your User class accepts a name
+from room_manager import RoomManager
 
 # Diffie–Hellman public parameters (must be the same as on the client)
 p = 0xE95E4A5F737059DC60DF5991D45029409E60FC09
@@ -15,6 +16,8 @@ g = 2
 HOST = "0.0.0.0"
 PORT = 5000
 clients = []
+rooms = RoomManager()
+sockets = {}                    # socket → {"user":User, "room":str}
 
 
 def handle_client(client_socket):
@@ -68,10 +71,65 @@ def handle_client(client_socket):
             print("Expected handshake but got:", handshake_data)
             return
 
-        # Add the client to the list and continue with further processing...
-        clients.append(client_socket)
+        
+
+        # ---------------- main recv loop ---------------- #
+
+        clients.append({"sock": client_socket, "user": user})
+        sockets[client_socket] = {"user": user, "room": None}
+
         while True:
-            time.sleep(1)
+        # --- 8‑byte length prefix ---
+            header = client_socket.recv(struct.calcsize("Q"))
+
+            if not header:
+                break
+            pkt_len = struct.unpack("Q", header)[0]
+            data = b""
+
+            while len(data) < pkt_len:
+                chunk = client_socket.recv(pkt_len - len(data))
+                if not chunk:
+                    break
+                data += chunk
+
+          # ---------------- packet switcher ----------------
+
+            if data.startswith(b"204"):  # create room
+                code = rooms.create_room(user)
+                sockets[client_socket]["room"] = code
+                reply = pst.ServerPacketStructure.RoomCreated(code)
+                client_socket.sendall(struct.pack("Q", len(reply)) + reply)
+
+            elif data.startswith(b"205"):  # join room
+                code = data.decode().split(',')[2]
+                if rooms.join_room(code, user):
+                    sockets[client_socket]["room"] = code
+                    reply = pst.ServerPacketStructure.JoinAck(code)
+                else:
+                    reply = b"405,join_error"
+                    client_socket.sendall(struct.pack("Q", len(reply)) + reply)
+
+            elif data.startswith(b"201"):  # video+audio
+                header_str, payload = data.split(b',', 3)[0:3], data.split(b',', 3)[3]
+                vid_len = int(header_str[1])
+                aud_len = int(header_str[2])
+                vid = payload[:vid_len]
+                aud = payload[vid_len:vid_len + aud_len]
+
+                room_code = sockets[client_socket]["room"]
+
+                if not room_code:
+                    continue
+
+                for member in rooms.members(room_code):
+                    for s, meta in sockets.items():
+                        if meta["user"] == member and s is not client_socket:
+                            pkt = pst.ServerPacketStructure.VidAud(user_id, vid, aud)
+                            s.sendall(struct.pack("Q", len(pkt)) + pkt)
+
+
+
     except Exception as e:
         print("Error handling client:", e)
     finally:
