@@ -161,12 +161,14 @@ class StreamReceiver(threading.Thread):
             data = b""
             while len(data) < l:
                 data += self.sock.recv(l - len(data))
-            if not data.startswith(b"301"):
-                continue
+
 
             if data.startswith(b"306"):
                 n = int(data.decode().split(',')[2])
                 self.ui.parent().count_emitter.updated.emit(n)
+                continue
+
+            if not data.startswith(b"301"):
                 continue
 
             parts = data.split(b',', 4)

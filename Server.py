@@ -106,9 +106,9 @@ def handle_client(client_socket):
             if data.startswith(b"204"):  # create room
                 code = rooms.create_room(user)
                 sockets[client_socket]["room"] = code
-                broadcast_room_size(code)
                 reply = pst.ServerPacketStructure.RoomCreated(code)
                 client_socket.sendall(struct.pack("Q", len(reply)) + reply)
+                broadcast_room_size(code)
 
             elif data.startswith(b"205"):  # join room
                 code = data.decode().split(',')[2]
