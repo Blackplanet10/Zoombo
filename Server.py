@@ -152,7 +152,6 @@ def handle_client(client_socket):
         client_socket.close()
 
 
-
 def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
