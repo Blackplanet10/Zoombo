@@ -1,17 +1,15 @@
 from __future__ import annotations
-
-import collections
-import sys, json, struct, socket, threading, base64, secrets, queue
+import sys, json, struct, socket, threading, base64, secrets, queue, time, collections
 import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
+import pyaudio
 
 from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
-from audio import AudioIO, RATE, CHUNK
+from audio import AudioIO
 from gui.welcome import Ui_welcome
 from gui.home import Ui_home
 from gui.room import MainWindow as RoomUI
 
-import time
 
 
 with open("settings/client_settings.json") as f:
@@ -40,6 +38,54 @@ def _recv(sock):
         buf += part
     return json.loads(buf.decode())
 
+#--------------- dialog pick camera and mic ---------------
+
+class DeviceSelectDialog(QtWidgets.QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Select devices")
+        layout = QtWidgets.QFormLayout(self)
+
+        # ---------- cameras ----------
+        self.cam_combo = QtWidgets.QComboBox()
+        self.cam_indices = []
+        for idx in range(10):  # probe first 10 indices
+            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                self.cam_combo.addItem(f"Camera {idx}")
+                self.cam_indices.append(idx)
+                cap.release()
+        if not self.cam_indices:
+            self.cam_combo.addItem("Default (0)"); self.cam_indices.append(0)
+        layout.addRow("Webcam:", self.cam_combo)
+
+        # ---------- microphones ----------
+        self.mic_combo = QtWidgets.QComboBox()
+        self.mic_indices = []
+        pa = pyaudio.PyAudio()
+        for i in range(pa.get_device_count()):
+            info = pa.get_device_info_by_index(i)
+            if info.get("maxInputChannels", 0) > 0:
+                name = info.get("name", f"Mic {i}")
+                self.mic_combo.addItem(name)
+                self.mic_indices.append(i)
+        pa.terminate()
+        if not self.mic_indices:
+            self.mic_combo.addItem("Default"); self.mic_indices.append(None)
+        layout.addRow("Microphone:", self.mic_combo)
+
+        # buttons
+        btn_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(self.accept); btn_box.rejected.connect(self.reject)
+        layout.addRow(btn_box)
+
+    def get_selection(self):
+        if self.exec_() == QtWidgets.QDialog.Accepted:
+            cam = self.cam_indices[self.cam_combo.currentIndex()]
+            mic = self.mic_indices[self.mic_combo.currentIndex()]
+            return cam, mic
+        return None, None
+
 # =====================================================
 # GUI windows (WelcomeWindow & HomeWindow unchanged) …
 # =====================================================
@@ -52,8 +98,7 @@ class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
     def _go(self):
         name = self.Name.text().strip();
         if not name:
-            self.warning.setText("Enter your name ⤴")
-            return
+            self.warning.setText("Enter your name ⤴"); return
         self.home = HomeWindow(name); self.home.show(); self.close()
 
 class HomeWindow(QtWidgets.QMainWindow, Ui_home):
@@ -64,19 +109,21 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
         self.connectButton.clicked.connect(self._join)
         self.connectButton_2.clicked.connect(self._create)
     def _join(self):
-        code = self.Name.text().strip().upper()
-        if code:
-            self._launch(code)
+        code = self.Name.text().strip().upper();
+        if code: self._launch(code)
     def _create(self):
         code = ''.join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
         self._launch(code)
     def _launch(self, code):
-        try:
-            self.room = ChatRoom(self.user_name, code)
-        except ConnectionRefusedError:
-            QtWidgets.QMessageBox.critical(self, "Server", "Cannot reach server")
+        dlg = DeviceSelectDialog(); cam_idx, mic_idx = dlg.get_selection()
+        if cam_idx is None:  # user cancelled
             return
+        try:
+            self.room = ChatRoom(self.user_name, code, cam_idx, mic_idx)
+        except ConnectionRefusedError:
+            QtWidgets.QMessageBox.critical(self, "Server", "Cannot reach server"); return
         self.room.show(); self.close()
+
 
 # =====================================================
 # ChatRoom – now with audio
@@ -85,40 +132,36 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 class ChatRoom(RoomUI):
     frame_ready = QtCore.pyqtSignal(str, object)   # sender, cv2 frame
 
-    def __init__(self, user_name, room_code):
+    def __init__(self, user_name, room_code, cam_idx: int, mic_idx: int | None):
         super().__init__()
         self.user_name, self.room_code = user_name, room_code
         self.setWindowTitle(f"Room {room_code} – {user_name}")
-
-        # ---- video view mapping *before* any threads ------------
+        # view mapping
         self._view_slots = [self.graphicsView, self.graphicsView_2, self.graphicsView_3,
                             self.graphicsView_4, self.graphicsView_5, self.graphicsView_6]
-        self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
+        self._view_map = {}
         self.frame_ready.connect(self._show_frame)
-
-        # ---- AUDIO attributes must exist early ------------------
-        self._pending_vid = collections.defaultdict(list)  # ts, frame tuples
-
-        self._play_q: queue.Queue[bytes] = queue.Queue(maxsize=20)
-        self.audio_io: AudioIO | None = None
-
-        # ---- crypto / net ---------------------------------------
+        # audio attrs
+        self._play_q = queue.Queue(maxsize=20)
+        self.audio_io = None
+        self._pending_vid = collections.defaultdict(list)
+        # crypto / net
         self.public_key, self.private_key = generate_rsa_keypair()
-        self.sym_key: bytes | None = None
+        self.sym_key = None
         self.sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-        _send(self.sock, {"type": "join", "room_code": room_code, "name": user_name,
-                          "public_key": self.public_key})
-
-        # start receiver ***after*** all attributes above exist
+        _send(self.sock, {"type": "join", "room_code": room_code, "name": user_name, "public_key": self.public_key})
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
-
-        # ---- camera ---------------------------------------------
-        self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        # camera with chosen index
+        self.cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-        self._frame_timer = QtCore.QTimer(); self._frame_timer.timeout.connect(self._capture_frame)
+        self._frame_timer = QtCore.QTimer()
+        self._frame_timer.timeout.connect(self._capture_frame)
         self._frame_timer.start(int(1000 / TARGET_FPS))
+        # remember selected mic index for later
+        self._mic_idx = mic_idx
+
 
     # ------------------- networking -------------------
     def _recv_loop(self):
@@ -139,7 +182,8 @@ class ChatRoom(RoomUI):
     # ------------------- audio helper ------------------
     def _start_audio(self):
         if self.audio_io is None:
-            self.audio_io = AudioIO(self._send_audio_chunk, self._play_q)
+            self.audio_io = AudioIO(self._send_audio_chunk, self._play_q, input_dev=self._mic_idx)
+
 
     def _send_audio_chunk(self, pcm: bytes):
         if self.sym_key is None: return
