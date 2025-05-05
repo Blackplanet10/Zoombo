@@ -85,32 +85,33 @@ class ChatRoom(RoomUI):
         self.user_name, self.room_code = user_name, room_code
         self.setWindowTitle(f"Room {room_code} – {user_name}")
 
-        # view mapping *before* threads
+        # ---- video view mapping *before* any threads ------------
         self._view_slots = [self.graphicsView, self.graphicsView_2, self.graphicsView_3,
                             self.graphicsView_4, self.graphicsView_5, self.graphicsView_6]
         self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
         self.frame_ready.connect(self._show_frame)
 
-        # crypto / net
+        # ---- AUDIO attributes must exist early ------------------
+        self._play_q: queue.Queue[bytes] = queue.Queue(maxsize=20)
+        self.audio_io: AudioIO | None = None
+
+        # ---- crypto / net ---------------------------------------
         self.public_key, self.private_key = generate_rsa_keypair()
         self.sym_key: bytes | None = None
         self.sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
         _send(self.sock, {"type": "join", "room_code": room_code, "name": user_name,
                           "public_key": self.public_key})
 
+        # start receiver ***after*** all attributes above exist
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
 
-        # camera
+        # ---- camera ---------------------------------------------
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
         self._frame_timer = QtCore.QTimer(); self._frame_timer.timeout.connect(self._capture_frame)
         self._frame_timer.start(int(1000 / TARGET_FPS))
-
-        # audio – queues & threads spun up *after* sym key arrives
-        self._play_q: queue.Queue[bytes] = queue.Queue(maxsize=20)
-        self.audio_io: AudioIO | None = None
 
     # ------------------- networking -------------------
     def _recv_loop(self):

@@ -2,7 +2,7 @@ import socket, threading, json, struct, secrets
 from typing import Dict, List, Tuple
 from encryption import rsa_encrypt
 
-with open("settins/server_settings.json") as f:
+with open("settings/server_settings.json") as f:
     SETTINGS = json.load(f)
 HOST, PORT = SETTINGS["SERVER_HOST"], SETTINGS["SERVER_PORT"]
 
