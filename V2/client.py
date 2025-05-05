@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import collections
 import sys, json, struct, socket, threading, base64, secrets, queue
 import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -8,6 +10,9 @@ from audio import AudioIO, RATE, CHUNK
 from gui.welcome import Ui_welcome
 from gui.home import Ui_home
 from gui.room import MainWindow as RoomUI
+
+import time
+
 
 with open("settings/client_settings.json") as f:
     CFG = json.load(f)
@@ -92,6 +97,8 @@ class ChatRoom(RoomUI):
         self.frame_ready.connect(self._show_frame)
 
         # ---- AUDIO attributes must exist early ------------------
+        self._pending_vid = collections.defaultdict(list)  # ts, frame tuples
+
         self._play_q: queue.Queue[bytes] = queue.Queue(maxsize=20)
         self.audio_io: AudioIO | None = None
 
@@ -124,9 +131,9 @@ class ChatRoom(RoomUI):
                     print("🔑 key ready – starting audio")
                     self._start_audio()
                 elif kind == "frame" and self.sym_key:
-                    self._handle_frame(msg["from"], msg["data"])
+                    self._handle_frame(msg["from"], msg["data"], msg["ts"])
                 elif kind == "audio" and self.sym_key:
-                    self._handle_audio(msg["data"])
+                    self._handle_audio(msg["from"], msg["data"], msg["ts"])  # pass sender
         except ConnectionError:
             pass
 
@@ -139,15 +146,24 @@ class ChatRoom(RoomUI):
         if self.sym_key is None:
             return
         enc = xor_bytes(pcm, self.sym_key)
-        _send(self.sock, {"type": "audio", "data": base64.b64encode(enc).decode()})
+        _send(self.sock, {"type": "audio",
+                          "ts": time.time(),  # ← new
+                          "data": base64.b64encode(enc).decode()})
 
-    def _handle_audio(self, payload_b64: str):
+    def _handle_audio(self, sender: str, payload_b64: str, ts: float):
         raw = base64.b64decode(payload_b64)
         pcm = xor_bytes(raw, self.sym_key)
+
         try:
-            self._play_q.put_nowait(pcm)
+            self._play_q.put_nowait((pcm, ts))  # queue for speaker
         except queue.Full:
-            pass  # drop if speaker buffer saturated
+            pass
+
+        # pop and display any video frames whose timestamp ≤ this audio ts
+        vid_q = self._pending_vid[sender]
+        while vid_q and vid_q[0][0] <= ts:
+            _, frame = vid_q.pop(0)
+            self.frame_ready.emit(sender, frame)
 
     # ------------------- video helpers -----------------
     def _capture_frame(self):
@@ -161,16 +177,19 @@ class ChatRoom(RoomUI):
         if not ok:
             return
         enc = xor_bytes(buf.tobytes(), self.sym_key)
-        _send(self.sock, {"type": "frame", "from": self.user_name,
+        _send(self.sock, {"type": "frame",
+                          "from": self.user_name,
+                          "ts": time.time(),  # ← new
                           "data": base64.b64encode(enc).decode()})
         self.frame_ready.emit(self.user_name, frame)
 
-    def _handle_frame(self, sender, payload_b64):
+    def _handle_frame(self, sender, payload_b64, ts):
         raw = base64.b64decode(payload_b64)
         jpg = xor_bytes(raw, self.sym_key)
         frame = cv2.imdecode(np.frombuffer(jpg, np.uint8), cv2.IMREAD_COLOR)
         if frame is not None:
-            self.frame_ready.emit(sender, frame)
+            # store frame in per‑sender dict until its audio catches up
+            self._pending_vid[sender].append((ts, frame))
 
     # ------------------- UI drawing -------------------
     def _show_frame(self, sender, frame):
