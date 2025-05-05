@@ -128,15 +128,12 @@ def handle_client(client_socket):
                 aud = payload[vid_len:vid_len + aud_len]
 
                 room_code = sockets[client_socket]["room"]
-
-                if not room_code:
-                    continue
-
-                for member in rooms.members(room_code):
+                if room_code:
+                    pkt = pst.ServerPacketStructure.VidAud(user_id, vid, aud)
+                    envelope = struct.pack("Q", len(pkt)) + pkt
                     for s, meta in sockets.items():
-                        if meta["user"] == member and s is not client_socket:
-                            pkt = pst.ServerPacketStructure.VidAud(user_id, vid, aud)
-                            s.sendall(struct.pack("Q", len(pkt)) + pkt)
+                        if meta["room"] == room_code and s is not client_socket:
+                            s.sendall(envelope)
 
 
 

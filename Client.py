@@ -112,6 +112,10 @@ class PreviewEmitter(QtCore.QObject):
 class CountEmitter(QtCore.QObject):
     updated = QtCore.pyqtSignal(int)
 
+class RemoteFrame(QtCore.QObject):
+    ready = QtCore.pyqtSignal(int, QPixmap)   # uid, pixmap
+
+
 class StreamSender(threading.Thread):
     def __init__(self, sock, running_flag,preview_emitter):
         super().__init__(daemon=True)
@@ -145,6 +149,8 @@ class StreamSender(threading.Thread):
             self.sock.sendall(struct.pack("Q", len(pkt)) + pkt)
             time.sleep(1 / FPS)
 
+
+
 class StreamReceiver(threading.Thread):
     def __init__(self, sock, running_flag, room_window):
         super().__init__(daemon=True)
@@ -165,7 +171,7 @@ class StreamReceiver(threading.Thread):
 
             if data.startswith(b"306"):
                 n = int(data.decode().split(',')[2])
-                self.ui.parent().count_emitter.updated.emit(n)
+                self.ui.parent().roomCount.updated.emit(n)
                 continue
 
             if not data.startswith(b"301"):
@@ -263,7 +269,7 @@ class HomeWindow(QtWidgets.QMainWindow):
         self.count_emitter = CountEmitter()
         self.count_emitter.updated.connect(lambda n: self.room_window.roomCount.setText(f"Participants: {n}"))
 
-        # ---------- media threads ----------
+        # ---------- imgs threads ----------
         self.running = threading.Event()
         self.running.set()
 
