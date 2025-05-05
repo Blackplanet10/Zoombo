@@ -5,6 +5,7 @@ import sys, json, struct, socket, threading, base64, secrets, time
 
 import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
+from PyQt5.QtCore import pyqtSignal
 
 from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
 from gui.welcome import Ui_welcome
@@ -93,20 +94,24 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 # =====================================================
 
 class ChatRoom(RoomUI):
+    frame_ready = pyqtSignal(str, object)  # sender‑name, cv2 frame
+
     def __init__(self, user_name: str, room_code: str):
         super().__init__()
 
-        # ---------------- identifiers used everywhere ----------------
-        self.user_name = user_name          # ←  add / restore this line
+        self.user_name = user_name
         self.room_code = room_code
         self.setWindowTitle(f"Room {room_code} – {user_name}")
 
-        # ---------------- view‑slot map must exist before threads ----
+        # … view‑slots BEFORE starting threads …
         self._view_slots = [
             self.graphicsView, self.graphicsView_2, self.graphicsView_3,
             self.graphicsView_4, self.graphicsView_5, self.graphicsView_6,
         ]
         self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
+
+        # **connect the signal to the UI update method**
+        self.frame_ready.connect(self._show_frame)
 
         # ---------------- crypto / net setup -------------------------
         self.public_key, self.private_key = generate_rsa_keypair()
@@ -171,7 +176,8 @@ class ChatRoom(RoomUI):
         payload = base64.b64encode(enc).decode()
         _send(self.sock, {"type": "frame", "from": self.user_name, "data": payload})
 
-        self._show_frame(self.user_name, frame)
+        # self._show_frame(self.user_name, frame)
+        self.frame_ready.emit(self.user_name, frame)
 
     # ------------------------------------------------- remote frames
     def _handle_remote_frame(self, sender: str, payload_b64: str):
@@ -180,7 +186,7 @@ class ChatRoom(RoomUI):
         np_buf = np.frombuffer(jpeg_bytes, np.uint8)
         frame = cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
         if frame is not None:
-            self._show_frame(sender, frame)
+            self.frame_ready.emit(sender, frame)  # ← hop to GUI thread
 
     # ------------------------------------------------- display helpers
     def _show_frame(self, sender: str, frame):
