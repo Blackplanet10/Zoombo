@@ -2,7 +2,7 @@ import pyaudio, threading, queue, time
 from typing import Callable
 
 RATE   = 16_000
-CHUNK  = 320          # 20ms
+CHUNK  = 320          # 20 ms
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 
@@ -40,7 +40,7 @@ class AudioIO:
             self.on_capture(data)
 
     def _play_loop(self):
-        DELAY = 0.06  # 60ms sync cushion
+        DELAY = 0.06  # 60 ms sync cushion
         while self._running:
             try:
                 frame, ts = self.play_q.get(timeout=0.1)

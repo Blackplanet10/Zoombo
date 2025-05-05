@@ -49,12 +49,14 @@ class DeviceSelectDialog(QtWidgets.QDialog):
         # ---------- cameras ----------
         self.cam_combo = QtWidgets.QComboBox()
         self.cam_indices = []
-        for idx in range(10):  # probe first 10 indices
-            cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW)
+        for idx in range(10):
+            cap = cv2.VideoCapture(idx, cv2.CAP_MSMF)  # try modern Media Foundation
+            if not cap.isOpened():
+                cap.open(idx, cv2.CAP_DSHOW)  # fall back to DirectShow
             if cap.isOpened():
                 self.cam_combo.addItem(f"Camera {idx}")
                 self.cam_indices.append(idx)
-                cap.release()
+            cap.release()
         if not self.cam_indices:
             self.cam_combo.addItem("Default (0)"); self.cam_indices.append(0)
         layout.addRow("Webcam:", self.cam_combo)
@@ -130,37 +132,61 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 # =====================================================
 
 class ChatRoom(RoomUI):
-    frame_ready = QtCore.pyqtSignal(str, object)   # sender, cv2 frame
+    frame_ready = QtCore.pyqtSignal(str, object)
 
     def __init__(self, user_name, room_code, cam_idx: int, mic_idx: int | None):
         super().__init__()
-        self.user_name, self.room_code = user_name, room_code
-        self.setWindowTitle(f"Room {room_code} – {user_name}")
-        # view mapping
-        self._view_slots = [self.graphicsView, self.graphicsView_2, self.graphicsView_3,
-                            self.graphicsView_4, self.graphicsView_5, self.graphicsView_6]
-        self._view_map = {}
-        self.frame_ready.connect(self._show_frame)
-        # audio attrs
-        self._play_q = queue.Queue(maxsize=20)
+
+        # 1) attributes needed by background threads -----------------
+        self._mic_idx = mic_idx
+        self._play_q: queue.Queue[tuple[bytes, float]] = queue.Queue(maxsize=20)
         self.audio_io = None
         self._pending_vid = collections.defaultdict(list)
-        # crypto / net
+
+        # 2) GUI‑related members -------------------------------------
+        self.user_name, self.room_code = user_name, room_code
+        self.setWindowTitle(f"Room {room_code} – {user_name}")
+        self._view_slots = [
+            self.graphicsView, self.graphicsView_2, self.graphicsView_3,
+            self.graphicsView_4, self.graphicsView_5, self.graphicsView_6
+        ]
+        self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
+        self.frame_ready.connect(self._show_frame)
+
+        # 3) networking / crypto -------------------------------------
         self.public_key, self.private_key = generate_rsa_keypair()
-        self.sym_key = None
+        self.sym_key: bytes | None = None
         self.sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-        _send(self.sock, {"type": "join", "room_code": room_code, "name": user_name, "public_key": self.public_key})
-        self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
+        _send(self.sock, {
+            "type": "join",
+            "room_code": room_code,
+            "name": user_name,
+            "public_key": self.public_key,
+        })
+
+        # receiver thread starts only after every attr above exists
+        self._recv_thread = threading.Thread(
+            target=self._recv_loop, daemon=True)
         self._recv_thread.start()
-        # camera with chosen index
-        self.cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
-        self._frame_timer = QtCore.QTimer()
+
+        # 4) open the selected camera with graceful fallback ----------
+        self.cap = cv2.VideoCapture(cam_idx, cv2.CAP_MSMF)
+        if not self.cap.isOpened():
+            self.cap.open(cam_idx, cv2.CAP_DSHOW)
+        if not self.cap.isOpened():
+            self.cap.open(cam_idx)         # CAP_ANY
+        if not self.cap.isOpened():
+            QtWidgets.QMessageBox.warning(
+                self, "Camera",
+                "Selected camera could not be opened – video disabled.")
+        else:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WIDTH)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, HEIGHT)
+
+        # video timer -------------------------------------------------
+        self._frame_timer = QtCore.QTimer(self)
         self._frame_timer.timeout.connect(self._capture_frame)
         self._frame_timer.start(int(1000 / TARGET_FPS))
-        # remember selected mic index for later
-        self._mic_idx = mic_idx
 
 
     # ------------------- networking -------------------
