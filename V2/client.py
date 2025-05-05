@@ -5,9 +5,9 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 
 from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
 from audio import AudioIO, RATE, CHUNK
-from welcome import Ui_welcome
-from home import Ui_home
-from room import MainWindow as RoomUI
+from gui.welcome import Ui_welcome
+from gui.home import Ui_home
+from gui.room import MainWindow as RoomUI
 
 with open("client_settings.json") as f:
     CFG = json.load(f)
