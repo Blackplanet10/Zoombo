@@ -127,15 +127,14 @@ class ChatRoom(RoomUI):
                 msg = _recv(self.sock)
                 kind = msg.get("type")
                 if kind == "sym_key":
-                    enc = msg["data"]; self.sym_key = rsa_decrypt(enc, self.private_key)
-                    print("🔑 key ready – starting audio")
-                    self._start_audio()
+                    self.sym_key = rsa_decrypt(msg["data"], self.private_key); self._start_audio()
                 elif kind == "frame" and self.sym_key:
                     self._handle_frame(msg["from"], msg["data"], msg["ts"])
                 elif kind == "audio" and self.sym_key:
-                    self._handle_audio(msg["from"], msg["data"], msg["ts"])  # pass sender
+                    self._handle_audio(msg["from"], msg["data"], msg["ts"])
         except ConnectionError:
             pass
+
 
     # ------------------- audio helper ------------------
     def _start_audio(self):
@@ -143,11 +142,11 @@ class ChatRoom(RoomUI):
             self.audio_io = AudioIO(self._send_audio_chunk, self._play_q)
 
     def _send_audio_chunk(self, pcm: bytes):
-        if self.sym_key is None:
-            return
+        if self.sym_key is None: return
         enc = xor_bytes(pcm, self.sym_key)
         _send(self.sock, {"type": "audio",
-                          "ts": time.time(),  # ← new
+                          "from": self.user_name,             # FIX v1.2
+                          "ts": time.time(),
                           "data": base64.b64encode(enc).decode()})
 
     def _handle_audio(self, sender: str, payload_b64: str, ts: float):
@@ -167,19 +166,15 @@ class ChatRoom(RoomUI):
 
     # ------------------- video helpers -----------------
     def _capture_frame(self):
-        if self.sym_key is None:
-            return
+        if self.sym_key is None: return
         ok, frame = self.cap.read();
-        if not ok:
-            return
+        if not ok: return
         frame = cv2.resize(frame, (WIDTH, HEIGHT))
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_Q])
-        if not ok:
-            return
+        if not ok: return
         enc = xor_bytes(buf.tobytes(), self.sym_key)
-        _send(self.sock, {"type": "frame",
-                          "from": self.user_name,
-                          "ts": time.time(),  # ← new
+        _send(self.sock, {"type": "frame", "from": self.user_name,
+                          "ts": time.time(),
                           "data": base64.b64encode(enc).decode()})
         self.frame_ready.emit(self.user_name, frame)
 
