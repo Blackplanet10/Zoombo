@@ -129,7 +129,7 @@ class Server:
 
     def serve_forever(self):
         with socket.create_server((HOST, PORT)) as srv:
-            print(f"🟢 Server listening on {HOST}:{PORT}")
+            print(f"🟢 Server listening on {socket.gethostbyname(socket.gethostname())}:{PORT}")
             while True:
                 sock, addr = srv.accept()
                 Client(sock, addr, self).start()

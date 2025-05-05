@@ -95,13 +95,18 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 class ChatRoom(RoomUI):
     def __init__(self, user_name: str, room_code: str):
         super().__init__()
-        self.user_name = user_name
-        self.room_code = room_code
-        self.setWindowTitle(f"Room {room_code} – {user_name}")
 
         # ---------------- crypto / net setup ----------------
         self.public_key, self.private_key = generate_rsa_keypair()
         self.sym_key: bytes | None = None
+
+        # ----‑‑‑‑‑‑‑‑‑‑  INSERT THIS BLOCK EARLIER  ‑‑‑‑‑‑‑‑‑‑----
+        self._view_slots = [
+            self.graphicsView, self.graphicsView_2, self.graphicsView_3,
+            self.graphicsView_4, self.graphicsView_5, self.graphicsView_6,
+        ]
+        self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
+        # -----------------------------------------------------
 
         self.sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
         _send(self.sock, {
