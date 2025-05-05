@@ -9,7 +9,7 @@ from gui.welcome import Ui_welcome
 from gui.home import Ui_home
 from gui.room import MainWindow as RoomUI
 
-with open("client_settings.json") as f:
+with open("settings/client_settings.json") as f:
     CFG = json.load(f)
 SERVER_HOST, SERVER_PORT = CFG["SERVER_HOST"], CFG["SERVER_PORT"]
 TARGET_FPS = CFG["TARGET_FPS"]
