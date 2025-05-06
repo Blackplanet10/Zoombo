@@ -193,7 +193,7 @@ class StreamReceiver(threading.Thread):
             pix = QPixmap.fromImage(img)
 
             # pick a graphicsView slot deterministically
-            views = [self.ui.graphicsView, self.ui.graphicsView_2,
+            views = [self.ui.graphicsView, self.ui.graphicsView_1,
                      self.ui.graphicsView_3, self.ui.graphicsView_4,
                      self.ui.graphicsView_5, self.ui.graphicsView_6]
             view = views[uid % len(views)]

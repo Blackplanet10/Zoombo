@@ -1,5 +1,6 @@
 from __future__ import annotations
 import sys, json, struct, socket, threading, base64, secrets, queue, time, collections
+from html import escape
 import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyaudio
@@ -8,7 +9,12 @@ from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
 from audio import AudioIO
 from gui.welcome import Ui_welcome
 from gui.home import Ui_home
-from gui.room import Ui_MainWindow          # room.py now exposes Ui_MainWindow
+from gui.room import Ui_MainWindow
+
+
+import pathlib, os
+ROOT = pathlib.Path(__file__).resolve().parent           # V2 or gui
+IMG  = lambda n: os.fspath(ROOT / ("imgs" if ROOT.name == "gui" else "gui/imgs") / n)
 
 
 # ───────────────────── settings ──────────────────────
@@ -89,7 +95,7 @@ class DeviceSelectDialog(QtWidgets.QDialog):
         return None, None
 
 
-# ───────────────────── basic windows ──────────────────
+# ─────────────────────basic windows ──────────────────
 class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
     def __init__(self):
         super().__init__(); self.setupUi(self)
@@ -121,10 +127,7 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
         self._enter(code)
 
     def _enter(self, code: str):
-        dlg = DeviceSelectDialog(self)
-        cam_idx, mic_idx = dlg.get()
-        if cam_idx is None:
-            return                          # user cancelled
+        cam_idx, mic_idx = 0, None
         try:
             self.room = ChatRoom(self.user_name, code, cam_idx, mic_idx)
         except ConnectionRefusedError:
@@ -140,7 +143,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     def __init__(self, user_name: str, room_code: str, cam_idx: int, mic_idx: int | None):
         super().__init__(); self.setupUi(self)
 
-        # 1 — state used by threads (must exist first)
+
+        # 1—state used by threads (must exist first)
         self.user_name, self.room_code    = user_name, room_code
         self._cam_idx, self._mic_idx      = cam_idx, mic_idx
         self._camera_on, self._mic_on     = True, True
@@ -148,27 +152,36 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.audio_io: AudioIO | None     = None
         self._pending_vid = collections.defaultdict(list)
 
-        # 2 — GUI wiring
+        # 2—GUI wiring
         self.setWindowTitle(f"Room {room_code} – {user_name}")
         self.label.setText(f"ROOM ID: {room_code}")
         self.frame_ready.connect(self._show_frame)
+
+        self._force_close = False  # ↲ internal; Leave button sets this
 
         # mute / camera Toggles
         self.micButton.toggled.connect(self._toggle_mic)
         self.cameraButton.toggled.connect(self._toggle_camera)
         self.SettingsButton.clicked.connect(self._change_devices)
         self.sendButton.clicked.connect(self._send_text)
+        self.leaveButton.clicked.connect(self._confirm_leave)
+
+        self.cameraButton.setIcon(QtGui.QIcon(IMG("camera_green.png")))
+        self.micButton.setIcon(QtGui.QIcon(IMG("mic_green.png")))
+
+        self.cameraButton.clicked.connect(self._toggle_camera)
+        self.micButton.clicked.connect(self._toggle_mic)
 
         # graphics‑view slots (4 peers max)
         self._view_slots = [
-            self.graphicsView_7,
-            self.graphicsView_8,
-            self.graphicsView_9,
-            self.graphicsView_12
+            self.graphicsView_1,
+            self.graphicsView_2,
+            self.graphicsView_3,
+            self.graphicsView_4
         ]
         self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
 
-        # 3 — crypto / socket
+        # 3—crypto / socket
         self.public_key, self.private_key = generate_rsa_keypair()
         self.sym_key: bytes | None        = None
         self.sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
@@ -181,10 +194,10 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
 
-        # 4 — camera
+        # 4-camera
         self._open_camera(cam_idx)
 
-        # 5 — timer for outgoing frames
+        # 5-timer for outgoing frames
         self._frame_timer = QtCore.QTimer(self)
         self._frame_timer.timeout.connect(self._capture_frame)
         self._frame_timer.start(int(1000 / TARGET_FPS))
@@ -208,16 +221,24 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             self._camera_on = False
             self.cameraButton.setChecked(True)   # show crossed‑out icon
 
-    def _toggle_camera(self, checked: bool):
-        self._camera_on = not checked
-        ico = "camera_red.png" if checked else "camera_green.png"
-        self.cameraButton.setIcon(QtGui.QIcon(f"LOGO/{ico}"))
+    # ── camera click ──────────────────────────────────────
+    def _toggle_camera(self):
+        self._camera_on = not self._camera_on
+        icon = "camera_green.png" if self._camera_on else "camera_red.png"
+        self.cameraButton.setIcon(QtGui.QIcon(f"{IMG(icon)}"))
+        if not self._camera_on:
+            self._show_blank(self.user_name)
 
-    # ── mic helpers ───────────────────────────────────
-    def _toggle_mic(self, checked: bool):
-        self._mic_on = not checked
-        ico = "mic_red.png" if checked else "mic_green.png"
-        self.micButton.setIcon(QtGui.QIcon(f"LOGO/{ico}"))
+    # ── mic click ─────────────────────────────────────────
+    def _toggle_mic(self):
+        self._mic_on = not self._mic_on
+        icon = "mic_green.png" if self._mic_on else "mic_red.png"
+        self.micButton.setIcon(QtGui.QIcon(f"{IMG(icon)}"))
+        _send(self.sock, {"type": "mute",
+                          "from": self.user_name,
+                          "state": not self._mic_on})
+
+        self._update_mute_badge(self.user_name, not self._mic_on)
 
     # ── settings: change devices at run time ──────────
     def _change_devices(self):
@@ -232,6 +253,16 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             self.audio_io = None
             if self.sym_key:                    # if key already known
                 self._start_audio()
+
+    # ───────────────── leave helper ─────────────────────
+    def _confirm_leave(self):
+        ans = QtWidgets.QMessageBox.question(
+            self, "Leave room", "Are you sure you want to leave the call?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+        if ans == QtWidgets.QMessageBox.Yes:
+            self.close()  # triggers cleanup in closeEvent
 
     # ── outgoing audio / video ────────────────────────
     def _start_audio(self):
@@ -254,7 +285,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                           "from": self.user_name,
                           "ts": time.time(),
                           "data": base64.b64encode(enc).decode()})
-        self.frame_ready.emit(self.user_name, frame)
+        self.frame_ready.emit(self.user_name, cv2.flip(frame, 1))
 
     def _send_audio_chunk(self, pcm: bytes):
         if self.sym_key is None or not self._mic_on:
@@ -291,8 +322,26 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     self._handle_audio(msg["from"], msg["data"], msg["ts"])
                 elif kind == "chat":
                     self._append_chat(msg["from"], msg["text"])
+                elif kind == "mute":
+                    self._update_mute_badge(msg["from"], msg["state"])
         except ConnectionError:
             pass
+
+    def _get_name_label(self, view):
+        idx = list(self._view_map.values()).index(view)
+        return getattr(self, f"nameLabel{idx}")
+
+    def _show_blank(self, sender):
+        view = self._view_map.get(sender)
+        if not view:
+            return
+        scn = QtWidgets.QGraphicsScene()
+        scn.setBackgroundBrush(QtGui.QColor("#4C2C76"))
+        view.setScene(scn)
+        lbl = self._get_name_label(view)
+        lbl.setText(sender)
+        lbl.resize(view.width(), 24)
+        lbl.move(view.x(), view.y() + view.height() - 24)
 
     # ── incoming helpers ──────────────────────────────
     def _handle_audio(self, sender: str, payload_b64: str, ts: float):
@@ -314,26 +363,74 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if frame is not None:
             self._pending_vid[sender].append((ts, frame))
 
+    def _update_mute_badge(self, sender: str, muted: bool):
+        view = self._view_map.get(sender)
+        if not view:
+            return
+        idx = list(self._view_map.values()).index(view)
+        badge = getattr(self, f"muteBadge{idx}")
+        if muted:
+            # top‑right corner, 6 px padding
+            badge.move(view.x() + view.width() - badge.width() - 6,
+                       view.y() + 6)
+            badge.show()
+        else:
+            badge.hide()
+
     # ── chat UI ───────────────────────────────────────
     def _append_chat(self, sender: str, text: str):
-        self.textBrowser.append(f"<b>{sender}:</b> {QtGui.QGuiApplication.escape(text)}")
+        self.textBrowser.append(f"<b>{escape(sender)}:</b> {escape(text)}")
 
     # ── video display ─────────────────────────────────
     def _show_frame(self, sender: str, frame):
         view = self._view_map.get(sender)
         if view is None and self._view_slots:
-            view = self._view_slots.pop(0); self._view_map[sender] = view
+            view = self._view_slots.pop(0);
+            self._view_map[sender] = view
         if view is None:
             return
+
+        lbl = self._get_name_label(view)
+        lbl.setText(sender)
+        lbl.adjustSize()
+        lbl.move(view.mapTo(self, QtCore.QPoint(6, view.height() - lbl.height() - 6)))
+        lbl.show()
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
-        img = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
-        scene = QtWidgets.QGraphicsScene()
-        scene.addPixmap(QtGui.QPixmap.fromImage(img))
-        view.setScene(scene)
+        qimg = QtGui.QImage(rgb.data, w, h, ch * w, QtGui.QImage.Format_RGB888)
+        pix = QtGui.QPixmap.fromImage(qimg)
+
+        scn = QtWidgets.QGraphicsScene()
+        item = scn.addPixmap(pix)
+        item.setTransformationMode(QtCore.Qt.SmoothTransformation)
+        view.setScene(scn)
+        view.setResizeAnchor(QtWidgets.QGraphicsView.AnchorViewCenter)
+        view.fitInView(item, QtCore.Qt.KeepAspectRatio)
+
+        #update mute icon
+        self._update_mute_badge(sender, sender != self.user_name and
+                                        not self._mic_on if sender == self.user_name else
+        getattr(self, "_remote_muted", {}).get(sender, False))
+
+        # position / text of name overlay
+        lbl = self._get_name_label(view)
+        lbl.setText(sender)
+        lbl.resize(view.width(), 24)
+        lbl.move(view.x(), view.y() + view.height() - 24)
 
     # ── cleanup ───────────────────────────────────────
-    def closeEvent(self, ev):
+    def closeEvent(self, ev: QtGui.QCloseEvent):
+        if not self._force_close:
+            ans = QtWidgets.QMessageBox.question(
+                self, "Leave room",
+                "Are you sure you want to leave the call?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No)
+            if ans == QtWidgets.QMessageBox.No:
+                ev.ignore()
+                return
+        # ↓ existing cleanup stays the same
         try:
             self._frame_timer.stop()
             if self.cap.isOpened():

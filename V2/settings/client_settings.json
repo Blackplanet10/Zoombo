@@ -3,6 +3,6 @@
   "FRAME_WIDTH": 640,
   "FRAME_HEIGHT": 480,
   "JPEG_QUALITY": 30,
-  "SERVER_HOST": "https://e11f-2a0d-6fc2-43d0-e600-1151-a744-3f11-f609.ngrok-free.app",
+  "SERVER_HOST": "192.168.1.204",
   "SERVER_PORT": 5000
 }
