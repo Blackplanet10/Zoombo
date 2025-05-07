@@ -10,6 +10,10 @@
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
+import pathlib, os
+ROOT = pathlib.Path(__file__).resolve().parent           # V2 or gui
+IMG  = lambda n: os.fspath(ROOT / ("imgs" if ROOT.name == "gui" else "gui/imgs") / n)
+
 
 class Ui_home(object):
     def setupUi(self, home):
@@ -26,7 +30,7 @@ class Ui_home(object):
         self.logo = QtWidgets.QLabel(self.centralwidget)
         self.logo.setGeometry(QtCore.QRect(10, 0, 351, 71))
         self.logo.setText("")
-        self.logo.setPixmap(QtGui.QPixmap(r'GUI\imgs\logo no bg.png'))
+        self.logo.setPixmap(QtGui.QPixmap(IMG('logo no bg.png')))
         self.logo.setScaledContents(True)
         self.logo.setObjectName("logo")
         self.label = QtWidgets.QLabel(self.centralwidget)
