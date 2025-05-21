@@ -47,6 +47,8 @@ class Client(threading.Thread):
 
             while True:
                 msg = _recv(self.sock)
+                if msg.get("type") == "leave":
+                    break  # Explicit leave request
                 room.broadcast(msg, exclude=self)
         except ConnectionError:
             pass
@@ -79,7 +81,7 @@ class Room:
         with self._lock:
             if cl in self.clients:
                 self.clients.remove(cl)
-        self.broadcast({"type": "status", "text": f"{cl.name} left."})
+        self.broadcast({"type": "leave", "from": cl.name})
 
     def broadcast(self, msg, exclude=None):
         for c in list(self.clients):

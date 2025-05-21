@@ -288,13 +288,16 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.frame_ready.emit(self.user_name, cv2.flip(frame, 1))
 
     def _send_audio_chunk(self, pcm: bytes):
-        if self.sym_key is None or not self._mic_on:
+        if self.sym_key is None:
             return
+        if not self._mic_on:
+            pcm = b"-1"
+
         enc = xor_bytes(pcm, self.sym_key)
         _send(self.sock, {"type": "audio",
-                          "from": self.user_name,
-                          "ts": time.time(),
-                          "data": base64.b64encode(enc).decode()})
+                              "from": self.user_name,
+                              "ts": time.time(),
+                              "data": base64.b64encode(enc).decode()})
 
     # ── outgoing text chat ────────────────────────────
     def _send_text(self):
@@ -313,6 +316,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             while True:
                 msg = _recv(self.sock)
                 kind = msg.get("type")
+                sender = msg.get("from")
+
                 if kind == "sym_key":
                     self.sym_key = rsa_decrypt(msg["data"], self.private_key)
                     self._start_audio()
@@ -324,6 +329,10 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     self._append_chat(msg["from"], msg["text"])
                 elif kind == "mute":
                     self._update_mute_badge(msg["from"], msg["state"])
+                elif kind == "join":
+                    self._handle_user_join(sender)
+                elif kind == "leave":
+                    self._handle_user_leave(sender)
         except ConnectionError:
             pass
 
@@ -344,6 +353,31 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         lbl.move(view.x(), view.y() + view.height() - 24)
 
     # ── incoming helpers ──────────────────────────────
+
+    def _handle_user_join(self, sender: str):
+        self._append_chat("System", f"{sender} has joined the call.")
+        if sender in self._view_map:
+            view = self._view_map.pop(sender)
+            scn = QtWidgets.QGraphicsScene()
+            view.setScene(scn)
+            lbl = self._get_name_label(view)
+            lbl.hide()
+
+            # Recycle view slot
+            self._view_slots.insert(0, view)
+
+    def _handle_user_leave(self, sender: str):
+        self._append_chat("System", f"{sender} has left the call.")
+        if sender in self._view_map:
+            view = self._view_map.pop(sender)
+            scn = QtWidgets.QGraphicsScene()
+            view.setScene(scn)
+            lbl = self._get_name_label(view)
+            lbl.hide()
+
+            # Recycle view slot
+            self._view_slots.insert(0, view)
+
     def _handle_audio(self, sender: str, payload_b64: str, ts: float):
         raw = base64.b64decode(payload_b64)
         pcm = xor_bytes(raw, self.sym_key)
@@ -370,7 +404,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         idx = list(self._view_map.values()).index(view)
         badge = getattr(self, f"muteBadge{idx}")
         if muted:
-            # top‑right corner, 6 px padding
+            # top‑right corner, 6px padding
             badge.move(view.x() + view.width() - badge.width() - 6,
                        view.y() + 6)
             badge.show()
@@ -437,6 +471,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 self.cap.release()
             if self.audio_io:
                 self.audio_io.close()
+            # Send explicit leave message to server
+            _send(self.sock, {"type": "leave", "from": self.user_name})
             self.sock.close()
         except Exception:
             pass
