@@ -4,7 +4,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 import pathlib, os
 ROOT = pathlib.Path(__file__).resolve().parent           # V2 or gui
 IMG  = lambda n: os.fspath(ROOT / ("imgs" if ROOT.name == "gui" else "gui/imgs") / n)
-
+#hi
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
