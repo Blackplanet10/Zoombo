@@ -330,8 +330,10 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 elif kind == "mute":
                     self._update_mute_badge(msg["from"], msg["state"])
                 elif kind == "join":
+                    print(f"User {sender} joined the room")
                     self._handle_user_join(sender)
                 elif kind == "leave":
+                    print(f"User {sender} left the room")
                     self._handle_user_leave(sender)
         except ConnectionError:
             pass
@@ -355,7 +357,6 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     # ── incoming helpers ──────────────────────────────
 
     def _handle_user_join(self, sender: str):
-        self._append_chat("System", f"{sender} has joined the call.")
         if sender in self._view_map:
             view = self._view_map.pop(sender)
             scn = QtWidgets.QGraphicsScene()
@@ -365,17 +366,21 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
             # Recycle view slot
             self._view_slots.insert(0, view)
+            self._append_chat("System", f"{sender} has joined the call.")
+
 
     def _handle_user_leave(self, sender: str):
         self._append_chat("System", f"{sender} has left the call.")
         if sender in self._view_map:
-            view = self._view_map.pop(sender)
+            view = self._view_map[sender]
+            lbl = self._get_name_label(view)
+            lbl.setText("")
+            lbl.hide()
             scn = QtWidgets.QGraphicsScene()
             view.setScene(scn)
-            lbl = self._get_name_label(view)
-            lbl.hide()
+            self._view_map.pop(sender)
 
-            # Recycle view slot
+            # Make usable by another user
             self._view_slots.insert(0, view)
 
     def _handle_audio(self, sender: str, payload_b64: str, ts: float):
@@ -464,7 +469,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             if ans == QtWidgets.QMessageBox.No:
                 ev.ignore()
                 return
-        # ↓ existing cleanup stays the same
+
         try:
             self._frame_timer.stop()
             if self.cap.isOpened():
@@ -473,6 +478,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 self.audio_io.close()
             # Send explicit leave message to server
             _send(self.sock, {"type": "leave", "from": self.user_name})
+            self.sock.shutdown(socket.SHUT_WR)
+            time.sleep(0.1)  # or up to 0.5s for even more reliability
             self.sock.close()
         except Exception:
             pass

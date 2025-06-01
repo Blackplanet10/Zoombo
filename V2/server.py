@@ -82,12 +82,7 @@ class Room:
             if cl in self.clients:
                 self.clients.remove(cl)
         self.broadcast({"type": "leave", "from": cl.name})
-
-        # check if room is empty
-        if not self.clients:
-            self.server.drop(self.code, cl)
-            print(f"Room {self.code} is empty and has been removed.")
-
+        print(f"{cl.name} left room {self.code}. Users remaining: {len(self.clients)}")
 
     def broadcast(self, msg, exclude=None):
         for c in list(self.clients):
@@ -111,6 +106,7 @@ class Server:
                 self.rooms[code].drop(cl)
                 if not self.rooms[code].clients:
                     del self.rooms[code]
+                    print(f"Room {code} is empty and has been removed.")
 
     def serve_forever(self):
         with socket.create_server((HOST, PORT)) as srv:
