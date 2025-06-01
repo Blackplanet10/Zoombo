@@ -83,6 +83,12 @@ class Room:
                 self.clients.remove(cl)
         self.broadcast({"type": "leave", "from": cl.name})
 
+        # check if room is empty
+        if not self.clients:
+            self.server.drop(self.code, cl)
+            print(f"Room {self.code} is empty and has been removed.")
+
+
     def broadcast(self, msg, exclude=None):
         for c in list(self.clients):
             if c is not exclude:
