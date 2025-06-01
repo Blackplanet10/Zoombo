@@ -123,8 +123,21 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
         if code: self._enter(code)
 
     def _create(self):
-        code = ''.join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
-        self._enter(code)
+        _send(self.sock, {
+            "type": "create_room",
+            "from": self.user_id, "name": self.user_name,
+            "public_key": self.public_key,
+        })
+        msg = _recv(self.sock)
+        if msg["type"] == "room_created":
+            room_code = msg["room_code"]
+
+        _send(self.sock, {
+            "type": "join",
+            "room_code": room_code,
+            "from": self.user_id, "name": self.user_name,
+            "public_key": self.public_key,
+        })
 
     def _enter(self, code: str):
         cam_idx, mic_idx = 0, None
@@ -145,6 +158,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
 
         # 1—state used by threads (must exist first)
+        self.user_id = None  # Will be set when welcome/sym_key message is received
+        self._user_names: dict[str, str] = {}  # user_id -> display name
         self.user_name, self.room_code    = user_name, room_code
         self._cam_idx, self._mic_idx      = cam_idx, mic_idx
         self._camera_on, self._mic_on     = True, True
@@ -188,7 +203,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         _send(self.sock, {
             "type": "join",
             "room_code": room_code,
-            "name": user_name,
+            "from": self.user_id, "name": self.user_name,
             "public_key": self.public_key,
         })
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
@@ -235,7 +250,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         icon = "mic_green.png" if self._mic_on else "mic_red.png"
         self.micButton.setIcon(QtGui.QIcon(f"{IMG(icon)}"))
         _send(self.sock, {"type": "mute",
-                          "from": self.user_name,
+                          "from": self.user_id, "name": self.user_name,
                           "state": not self._mic_on})
 
         self._update_mute_badge(self.user_name, not self._mic_on)
@@ -282,7 +297,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             return
         enc = xor_bytes(buf.tobytes(), self.sym_key)
         _send(self.sock, {"type": "frame",
-                          "from": self.user_name,
+                          "from": self.user_id, "name": self.user_name,
                           "ts": time.time(),
                           "data": base64.b64encode(enc).decode()})
         self.frame_ready.emit(self.user_name, cv2.flip(frame, 1))
@@ -295,7 +310,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
         enc = xor_bytes(pcm, self.sym_key)
         _send(self.sock, {"type": "audio",
-                              "from": self.user_name,
+                              "from": self.user_id, "name": self.user_name,
                               "ts": time.time(),
                               "data": base64.b64encode(enc).decode()})
 
@@ -307,34 +322,55 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.messageBox.clear()
         self._append_chat("You", txt)
         _send(self.sock, {"type": "chat",
-                          "from": self.user_name,
+                          "from": self.user_id, "name": self.user_name,
                           "text": txt})
 
-    # ── incoming handling thread ──────────────────────
+    #difterbute to helpers
     def _recv_loop(self):
         try:
             while True:
                 msg = _recv(self.sock)
                 kind = msg.get("type")
-                sender = msg.get("from")
 
-                if kind == "sym_key":
-                    self.sym_key = rsa_decrypt(msg["data"], self.private_key)
-                    self._start_audio()
-                elif kind == "frame" and self.sym_key:
+                # get key when welcome
+                if kind in ("welcome", "sym_key"):
+                    self.user_id = msg.get("user_id", self.user_id)
+                    self._user_names[self.user_id] = self.user_name
+                    if kind == "sym_key" and "data" in msg:
+                        self.sym_key = rsa_decrypt(msg["data"], self.private_key)
+                        self._start_audio()
+                    continue
+
+                # For join/leave/status/chat, always update mapping
+                if "user_id" in msg and "name" in msg:
+                    self._user_names[msg["user_id"]] = msg["name"]
+
+                if kind == "frame" and self.sym_key:
                     self._handle_frame(msg["from"], msg["data"], msg["ts"])
                 elif kind == "audio" and self.sym_key:
                     self._handle_audio(msg["from"], msg["data"], msg["ts"])
                 elif kind == "chat":
-                    self._append_chat(msg["from"], msg["text"])
+                    sender_id = msg.get("from")
+                    sender_name = self._user_names.get(sender_id, sender_id)
+                    self._append_chat(sender_name, msg["text"])
                 elif kind == "mute":
                     self._update_mute_badge(msg["from"], msg["state"])
                 elif kind == "join":
-                    print(f"User {sender} joined the room")
-                    self._handle_user_join(sender)
+                    sender_id = msg.get("user_id")
+                    sender_name = msg.get("name", sender_id)
+                    self._handle_user_join(sender_id, sender_name)
                 elif kind == "leave":
-                    print(f"User {sender} left the room")
-                    self._handle_user_leave(sender)
+                    sender_id = msg.get("from")
+                    sender_name = msg.get("name", sender_id)
+                    self._handle_user_leave(sender_id, sender_name)
+                elif kind == "status":
+                    # System message
+                    self._append_chat("System", msg.get("text", ""))
+                elif kind == "reject":
+                    reason = msg.get("reason", "Unknown reason")
+                    QtWidgets.QMessageBox.critical(self, "Join failed", reason)
+                    self.close()
+                    return
         except ConnectionError:
             pass
 
@@ -356,29 +392,28 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
     # ── incoming helpers ──────────────────────────────
 
-    def _handle_user_join(self, sender: str):
-        if sender in self._view_map:
-            view = self._view_map.pop(sender)
+    def _handle_user_join(self, user_id: str, name: str):
+        self._append_chat("System", f"{name} has joined the call.")
+        if user_id in self._view_map:
+            view = self._view_map.pop(user_id)
             scn = QtWidgets.QGraphicsScene()
             view.setScene(scn)
             lbl = self._get_name_label(view)
+            lbl.setText("")
             lbl.hide()
-
-            # Recycle view slot
             self._view_slots.insert(0, view)
-            self._append_chat("System", f"{sender} has joined the call.")
 
 
-    def _handle_user_leave(self, sender: str):
-        self._append_chat("System", f"{sender} has left the call.")
-        if sender in self._view_map:
-            view = self._view_map[sender]
+    def _handle_user_leave(self, user_id: str, name: str):
+        self._append_chat("System", f"{name} has left the call.")
+        if user_id in self._view_map:
+            view = self._view_map[user_id]
             lbl = self._get_name_label(view)
             lbl.setText("")
             lbl.hide()
             scn = QtWidgets.QGraphicsScene()
             view.setScene(scn)
-            self._view_map.pop(sender)
+            self._view_map.pop(user_id)
 
             # Make usable by another user
             self._view_slots.insert(0, view)
@@ -477,7 +512,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             if self.audio_io:
                 self.audio_io.close()
             # Send explicit leave message to server
-            _send(self.sock, {"type": "leave", "from": self.user_name})
+            _send(self.sock, {"type": "leave", "from": self.user_id, "name": self.user_name})
             self.sock.shutdown(socket.SHUT_WR)
             time.sleep(0.1)  # or up to 0.5s for even more reliability
             self.sock.close()

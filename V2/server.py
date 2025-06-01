@@ -1,12 +1,19 @@
 import socket, threading, json, struct, secrets
 from typing import Dict, List, Tuple
 from encryption import rsa_encrypt
+import string, random
+import secrets
+
 
 with open("settings/server_settings.json") as f:
     SETTINGS = json.load(f)
 HOST, PORT = SETTINGS["SERVER_HOST"], SETTINGS["SERVER_PORT"]
 
-# ── helper send/recv unchanged ─────────────────────
+#HELPERS-------------------------
+
+def generate_room_code(length=6):
+    chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return ''.join(random.choices(chars, k=length))
 
 def _send(sock: socket.socket, payload: dict):
     data = json.dumps(payload).encode()
@@ -25,7 +32,7 @@ def _recv(sock: socket.socket) -> dict:
         buf += part
     return json.loads(buf.decode())
 
-# ── Client / Room classes – only change: *no* filtering on "audio"  ──
+#CLASSES-----------------------------
 
 class Client(threading.Thread):
     def __init__(self, sock, addr, server):
@@ -33,17 +40,38 @@ class Client(threading.Thread):
         self.sock, self.addr, self.server = sock, addr, server
         self.room_code = None
         self.name = None
+        self.user_id = secrets.token_hex(16)  # Unique user ID
         self.pub_key = None
 
     def run(self):
         try:
             first = _recv(self.sock)
-            self.room_code = first["room_code"].upper()
-            self.name      = first["name"]
-            self.pub_key   = tuple(first["public_key"])
-
-            room = self.server.get_room(self.room_code, create=True)
-            room.add(self, self.pub_key)
+            if first["type"] == "create_room":
+                # Generate new code, create room, and send code to client
+                while True:
+                    code = generate_room_code()
+                    if code not in self.server.rooms:
+                        break
+                self.room_code = code
+                self.name = first["name"]
+                self.pub_key = tuple(first["public_key"])
+                room = self.server.get_room(self.room_code, create=True)
+                room.add(self, self.pub_key)
+                # Send room code back to client
+                _send(self.sock, {"type": "welcome", "user_id": self.user_id, "room_code": code})
+                # _send(self.sock, {"type": "room_created", "room_code": code})
+            elif first["type"] == "join":
+                self.room_code = first["room_code"].upper()
+                self.name = first["name"]
+                self.pub_key = tuple(first["public_key"])
+                # Only join if the room exists
+                if self.room_code not in self.server.rooms:
+                    _send(self.sock, {"type": "reject", "reason": "Room does not exist"})
+                    self.sock.close()
+                    return
+                room = self.server.get_room(self.room_code, create=False)
+                if not room.add(self, self.pub_key):
+                    return
 
             while True:
                 msg = _recv(self.sock)
@@ -67,22 +95,25 @@ class Room:
     def __init__(self, code):
         self.code = code
         self.sym_key = secrets.token_bytes(16)  # 128‑bit
-        self.clients: List[Client] = []
+        self.clients: Dict[str, Client] = {}
         self._lock = threading.Lock()
 
     def add(self, cl: Client, pub_key):
         with self._lock:
-            self.clients.append(cl)
+            if len(self.clients) >= 4:
+                cl.send({"type": "reject", "reason": "Room is full"})
+                cl.sock.close()
+                return False
+            self.clients[cl.user_id] = cl
         enc = rsa_encrypt(self.sym_key, pub_key)
-        cl.send({"type": "sym_key", "data": enc})
-        self.broadcast({"type": "status", "text": f"{cl.name} joined."})
+        cl.send({"type": "sym_key", "data": enc, "user_id": cl.user_id})
+        self.broadcast({"type": "status", "text": f"{cl.name} joined.", "user_id": cl.user_id})
+        return True
 
     def drop(self, cl: Client):
         with self._lock:
-            if cl in self.clients:
-                self.clients.remove(cl)
-        self.broadcast({"type": "leave", "from": cl.name})
-        print(f"{cl.name} left room {self.code}. Users remaining: {len(self.clients)}")
+            self.clients.pop(cl.user_id, None)
+        self.broadcast({"type": "leave", "from": cl.user_id, "name": cl.name})
 
     def broadcast(self, msg, exclude=None):
         for c in list(self.clients):
