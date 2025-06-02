@@ -5,13 +5,12 @@ import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyaudio
 
+from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
 from audio import AudioIO
 from gui.welcome import Ui_welcome
 from gui.home import Ui_home
 from gui.room import Ui_MainWindow
 
-
-from encryption import generate_rsa_keypair, rsa_encrypt, rsa_decrypt, xor_bytes
 
 import pathlib, os
 ROOT = pathlib.Path(__file__).resolve().parent           # V2 or gui
@@ -147,28 +146,7 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 
     def _enter(self, room_code, is_create):
         try:
-            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-            _send(sock, {"type": "register", "name": self.user_name})
-            msg = _recv(sock)
-            if msg.get("type") != "welcome" or "user_id" not in msg:
-                QtWidgets.QMessageBox.critical(self, "Error", "Registration failed")
-                return
-            user_id = msg["user_id"]
-            # Replace HomeWindow.sock with this new socket:
-            self.sock = sock
-            self.user_id = user_id
-        except Exception:
-            QtWidgets.QMessageBox.critical(self, "Error", "Could not connect to server")
-            return
-
-        try:
-            self.chat_room = ChatRoom(
-                self.sock,
-                self.user_id,
-                self.user_name,
-                room_code,
-                is_create
-            )
+            self.chat_room = ChatRoom(self.sock, self.user_id, self.user_name, room_code, is_create)
             self.chat_room.show()
             self.close()
         except Exception as e:
@@ -349,7 +327,6 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             QtWidgets.QMessageBox.No
         )
         if ans == QtWidgets.QMessageBox.Yes:
-            print("closing")
             self.close()  # triggers cleanup in closeEvent
 
     # ── outgoing audio / video ────────────────────────

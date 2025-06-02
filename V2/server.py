@@ -1,6 +1,6 @@
+import socket, threading, json, struct, secrets
 from typing import Dict, List, Tuple
-import socket, struct, json, threading, secrets
-from encryption import rsa_encrypt, xor_bytes
+from encryption import rsa_encrypt
 import string, random
 import secrets
 
