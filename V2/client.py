@@ -99,80 +99,93 @@ class DeviceSelectDialog(QtWidgets.QDialog):
 class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
     def __init__(self):
         super().__init__(); self.setupUi(self)
-        self.connectButton.clicked.connect(self._next)
+        self.connectButton.clicked.connect(self._connect)
         self.quitButton.clicked.connect(QtWidgets.QApplication.quit)
 
-    def _next(self):
+    def _connect(self):
         name = self.Name.text().strip()
         if not name:
-            self.warning.setText("Enter your name ⤴")
+            self.warning.setText("Enter your name")
             return
-        self.home = HomeWindow(name); self.home.show(); self.close()
+        try:
+            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
+            _send(sock, {"type": "register", "name": name})
+            msg = _recv(sock)
+            print(f"Received message: {msg}")
+            if msg.get("type") == "welcome" and "user_id" in msg:
+                print("approved server registration")
+                user_id = msg["user_id"]
+                self.home = HomeWindow(sock, name, user_id)
+                print(f"Connected as {name} (ID: {user_id})")
+                self.home.show()
+                self.close()
+            else:
+                QtWidgets.QMessageBox.critical(self, "Error", "Registration failed")
+        except Exception:
+            QtWidgets.QMessageBox.critical(self, "Error", "Could not connect to server")
 
 
 class HomeWindow(QtWidgets.QMainWindow, Ui_home):
-    def __init__(self, user_name: str):
+    def __init__(self, sock, user_name, user_id):
         super().__init__(); self.setupUi(self)
+        self.sock = sock
         self.user_name = user_name
-        self.label.setText(f"Hello {user_name} !")
+        self.user_id = user_id
         self.connectButton.clicked.connect(self._join)
         self.connectButton_2.clicked.connect(self._create)
+        print(f"HomeWindow initialized with socket {sock}, user_name {user_name}, user_id {user_id}")
+
 
     def _join(self):
         code = self.Name.text().strip().upper()
-        if code: self._enter(code)
+        if code:
+            self._enter(code, is_create=False)
 
     def _create(self):
-        _send(self.sock, {
-            "type": "create_room",
-            "from": self.user_id, "name": self.user_name,
-            "public_key": self.public_key,
-        })
-        msg = _recv(self.sock)
-        if msg["type"] == "room_created":
-            room_code = msg["room_code"]
+        self._enter(None, is_create=True)
 
-        _send(self.sock, {
-            "type": "join",
-            "room_code": room_code,
-            "from": self.user_id, "name": self.user_name,
-            "public_key": self.public_key,
-        })
-
-    def _enter(self, code: str):
-        cam_idx, mic_idx = 0, None
+    def _enter(self, room_code, is_create):
         try:
-            self.room = ChatRoom(self.user_name, code, cam_idx, mic_idx)
-        except ConnectionRefusedError:
-            QtWidgets.QMessageBox.critical(self, "Server", "Cannot reach server")
-            return
-        self.room.show(); self.close()
+            self.chat_room = ChatRoom(self.sock, self.user_id, self.user_name, room_code, is_create)
+            self.chat_room.show()
+            self.close()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Room Error", str(e))
 
 
 # ───────────────────  CHAT ROOM  ──────────────────────
 class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     frame_ready = QtCore.pyqtSignal(str, object)
 
-    def __init__(self, user_name: str, room_code: str, cam_idx: int, mic_idx: int | None):
-        super().__init__(); self.setupUi(self)
-
+    def __init__(self, sock, user_id: str, user_name: str, room_code: str = None, is_create: bool = False, cam_idx: int = 0, mic_idx: int = None):
+        super().__init__();
+        self.setupUi(self)
 
         # 1—state used by threads (must exist first)
-        self.user_id = None  # Will be set when welcome/sym_key message is received
-        self._user_names: dict[str, str] = {}  # user_id -> display name
-        self.user_name, self.room_code    = user_name, room_code
-        self._cam_idx, self._mic_idx      = cam_idx, mic_idx
-        self._camera_on, self._mic_on     = True, True
+        self.user_id = user_id
+        self._user_names: dict[str, str] = {user_id: user_name}  # user_id -> display name
+        self.user_name, self.room_code = user_name, room_code
+        self._cam_idx, self._mic_idx = cam_idx, mic_idx
+        self._camera_on, self._mic_on = True, True
         self._play_q: queue.Queue[tuple[bytes, float]] = queue.Queue(maxsize=20)
-        self.audio_io: AudioIO | None     = None
+        self.audio_io: AudioIO | None = None
         self._pending_vid = collections.defaultdict(list)
+        self.sock = sock
+
+        # Generate keys early!
+        self.public_key, self.private_key = generate_rsa_keypair()
+        self.sym_key: bytes | None = None
 
         # 2—GUI wiring
-        self.setWindowTitle(f"Room {room_code} – {user_name}")
-        self.label.setText(f"ROOM ID: {room_code}")
+        self.setWindowTitle(
+            f"Room {room_code} – {user_name}" if room_code and not is_create else "Creating room…"
+        )
+        self.label.setText(
+            f"ROOM ID: {room_code}" if room_code and not is_create else "Creating room…"
+        )
         self.frame_ready.connect(self._show_frame)
 
-        self._force_close = False  # ↲ internal; Leave button sets this
+        self._force_close = False  # Leave button sets this
 
         # mute / camera Toggles
         self.micButton.toggled.connect(self._toggle_mic)
@@ -196,23 +209,60 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         ]
         self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
 
-        # 3—crypto / socket
-        self.public_key, self.private_key = generate_rsa_keypair()
-        self.sym_key: bytes | None        = None
-        self.sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-        _send(self.sock, {
-            "type": "join",
-            "room_code": room_code,
-            "from": self.user_id, "name": self.user_name,
-            "public_key": self.public_key,
-        })
+        # --- ONLY ONE block for join/create ---
+        if is_create:
+            print("creating room")
+            _send(self.sock, {
+                "type": "create_room",
+                "user_id": self.user_id,
+                "name": self.user_name,
+                "public_key": self.public_key,
+            })
+            initial_responses = []
+            while True:
+                msg = _recv(self.sock)
+                kind = msg.get("type")
+                initial_responses.append(msg)
+                if kind == "room_created":
+                    self.room_code = msg["room_code"]
+                    self.setWindowTitle(f"Room {self.room_code} – {user_name}")
+                    self.label.setText(f"ROOM ID: {self.room_code}")
+                    break
+                elif kind == "reject":
+                    QtWidgets.QMessageBox.critical(self, "Server", msg.get("reason", "Room creation failed"))
+                    raise Exception(msg.get("reason", "Room creation failed"))
+
+            # Now process any initial responses (sym_key, status, etc) in the order received
+            for msg in initial_responses:
+                kind = msg.get("type")
+                if kind == "sym_key":
+                    self.user_id = msg.get("user_id", self.user_id)
+                    self.sym_key = rsa_decrypt(msg["data"], self.private_key)
+                    self._start_audio()
+                elif kind == "status":
+                    self._append_chat("System", msg.get("text", ""))
+                # Add more as needed for your protocol
+        else:
+            _send(self.sock, {
+                "type": "join",
+                "room_code": self.room_code,
+                "user_id": self.user_id,
+                "name": self.user_name,
+                "public_key": self.public_key,
+            })
+            msg = _recv(self.sock)
+            if msg.get("type") == "reject":
+                QtWidgets.QMessageBox.critical(self, "Server", msg.get("reason", "Join failed"))
+                raise Exception(msg.get("reason", "Join failed"))
+
+        # 5—start receive thread
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
 
-        # 4-camera
+        # 6-camera
         self._open_camera(cam_idx)
 
-        # 5-timer for outgoing frames
+        # 7-timer for outgoing frames
         self._frame_timer = QtCore.QTimer(self)
         self._frame_timer.timeout.connect(self._capture_frame)
         self._frame_timer.start(int(1000 / TARGET_FPS))
@@ -493,7 +543,6 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         lbl.resize(view.width(), 24)
         lbl.move(view.x(), view.y() + view.height() - 24)
 
-    # ── cleanup ───────────────────────────────────────
     def closeEvent(self, ev: QtGui.QCloseEvent):
         if not self._force_close:
             ans = QtWidgets.QMessageBox.question(
@@ -507,17 +556,31 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
         try:
             self._frame_timer.stop()
-            if self.cap.isOpened():
+            if hasattr(self, 'cap') and self.cap.isOpened():
                 self.cap.release()
             if self.audio_io:
                 self.audio_io.close()
             # Send explicit leave message to server
-            _send(self.sock, {"type": "leave", "from": self.user_id, "name": self.user_name})
-            self.sock.shutdown(socket.SHUT_WR)
-            time.sleep(0.1)  # or up to 0.5s for even more reliability
-            self.sock.close()
+            _send(self.sock, {
+                "type": "leave",
+                "user_id": self.user_id,
+                "room_code": self.room_code
+            })
+            self.sock.close()  # <--- Properly close the socket here!
         except Exception:
             pass
+
+        # Now create a new connection for HomeWindow
+        try:
+            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
+            _send(sock, {"type": "register", "name": self.user_name})
+            msg = _recv(sock)
+            if msg.get("type") == "welcome" and "user_id" in msg:
+                user_id = msg["user_id"]
+                self.home = HomeWindow(sock, self.user_name, user_id)
+                self.home.show()
+        except Exception:
+            QtWidgets.QMessageBox.critical(self, "Error", "Could not reconnect to server")
         super().closeEvent(ev)
 
 

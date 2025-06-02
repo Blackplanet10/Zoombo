@@ -45,25 +45,38 @@ class Client(threading.Thread):
 
     def run(self):
         try:
+            # 1. Registration: must be the first message
             first = _recv(self.sock)
-            if first["type"] == "create_room":
-                # Generate new code, create room, and send code to client
+            if first["type"] != "register":
+                _send(self.sock, {"type": "reject", "reason": "Must register first"})
+                self.sock.close()
+                return
+
+            self.user_id = secrets.token_hex(16)
+            self.name = first["name"]
+            _send(self.sock, {"type": "welcome", "user_id": self.user_id})
+
+            # 2. Wait for join/create_room request
+            second = _recv(self.sock)
+            if second["type"] == "create_room":
+                # Generate unique room code
                 while True:
                     code = generate_room_code()
                     if code not in self.server.rooms:
                         break
-                self.room_code = code
-                self.name = first["name"]
-                self.pub_key = tuple(first["public_key"])
+
+                self.room_code = str(code)
+                self.name = second["name"]
+                self.pub_key = tuple(second["public_key"])
                 room = self.server.get_room(self.room_code, create=True)
                 room.add(self, self.pub_key)
-                # Send room code back to client
-                _send(self.sock, {"type": "welcome", "user_id": self.user_id, "room_code": code})
-                # _send(self.sock, {"type": "room_created", "room_code": code})
-            elif first["type"] == "join":
-                self.room_code = first["room_code"].upper()
-                self.name = first["name"]
-                self.pub_key = tuple(first["public_key"])
+                _send(self.sock, {"type": "room_created", "room_code": code})
+
+            elif second["type"] == "join":
+                print(second)
+                self.room_code = second["room_code"].upper()
+                self.name = second["name"]
+                self.pub_key = tuple(second["public_key"])
                 # Only join if the room exists
                 if self.room_code not in self.server.rooms:
                     _send(self.sock, {"type": "reject", "reason": "Room does not exist"})
@@ -72,7 +85,13 @@ class Client(threading.Thread):
                 room = self.server.get_room(self.room_code, create=False)
                 if not room.add(self, self.pub_key):
                     return
+                # Optionally: send confirmation message here if needed
+            else:
+                _send(self.sock, {"type": "reject", "reason": "Must join or create room after registration"})
+                self.sock.close()
+                return
 
+            # 3. Main message loop
             while True:
                 msg = _recv(self.sock)
                 if msg.get("type") == "leave":
@@ -81,7 +100,7 @@ class Client(threading.Thread):
         except ConnectionError:
             pass
         finally:
-            if self.room_code:
+            if getattr(self, "room_code", None):
                 self.server.drop(self.room_code, self)
             self.sock.close()
 
@@ -116,9 +135,9 @@ class Room:
         self.broadcast({"type": "leave", "from": cl.user_id, "name": cl.name})
 
     def broadcast(self, msg, exclude=None):
-        for c in list(self.clients):
+        for c in list(self.clients.values()):
             if c is not exclude:
-                c.send(msg)
+                 c.send(msg)
 
 class Server:
     def __init__(self):
