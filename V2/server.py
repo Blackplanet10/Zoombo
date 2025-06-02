@@ -20,9 +20,12 @@ def _send(sock: socket.socket, payload: dict):
     sock.sendall(struct.pack("!I", len(data)) + data)
 
 def _recv(sock: socket.socket) -> dict:
-    hdr = sock.recv(4)
-    if not hdr:
-        raise ConnectionError
+    hdr = b""
+    while len(hdr) < 4:
+        part = sock.recv(4 - len(hdr))
+        if not part:
+            raise ConnectionError
+        hdr += part
     (ln,) = struct.unpack("!I", hdr)
     buf = b""
     while len(buf) < ln:

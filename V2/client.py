@@ -310,7 +310,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             QtWidgets.QMessageBox.warning(self, "Camera",
                                           "Selected camera couldn’t be opened. Video disabled.")
             self._camera_on = False
-            self.cameraButton.setChecked(True)   # show crossed‑out icon
+            self.cameraButton.setChecked(True)
 
     # ── camera click ──────────────────────────────────────
     def _toggle_camera(self):
@@ -332,26 +332,24 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self._mic_on = not self._mic_on
         icon = "mic_green.png" if self._mic_on else "mic_red.png"
         self.micButton.setIcon(QtGui.QIcon(f"{IMG(icon)}"))
-        _send(self.sock, {"type": "mute",
-                          "from": self.user_id, "name": self.user_name,
-                          "state": not self._mic_on})
-
+        _send(self.sock, {"type": "mute", "from": self.user_id, "name": self.user_name, "state": not self._mic_on})
         self._update_mute_badge(self.user_name, not self._mic_on)
 
     # ── settings: change devices at run time ──────────
     def _change_devices(self):
         dlg = DeviceSelectDialog(self)
         cam, mic = dlg.get()
-        print(f"User selected camera index {cam}, mic index {mic}")
         if cam is None:
             return
         self._cam_idx, self._mic_idx = cam, mic
         self._open_camera(cam)
+
+        # Always recreate AudioIO, even if currently muted
         if self.audio_io:
             self.audio_io.close()
-            self.audio_io = None
-            if self.sym_key:                    # if key already known
-                self._start_audio()
+        # Recreate AudioIO with latest mic index
+        if self.sym_key:
+            self.audio_io = AudioIO(self._send_audio_chunk, self._play_q, input_dev=self._mic_idx)
 
     # ───────────────── leave helper ─────────────────────
     def _confirm_leave(self):
