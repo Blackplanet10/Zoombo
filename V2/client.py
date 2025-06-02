@@ -151,6 +151,22 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
             self.close()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Room Error", str(e))
+            # Close the current socket, it may be dead
+            try: self.sock.close()
+            except Exception: pass
+            # Create a new socket for next attempt
+            try:
+                sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
+                _send(sock, {"type": "register", "name": self.user_name})
+                msg = _recv(sock)
+                if msg.get("type") == "welcome" and "user_id" in msg:
+                    self.sock = sock
+                    self.user_id = msg["user_id"]
+                else:
+                    raise Exception("Registration failed")
+            except Exception:
+                QtWidgets.QMessageBox.critical(self, "Error", "Could not reconnect to server")
+                self.sock = None
 
 
 # ───────────────────  CHAT ROOM  ──────────────────────
