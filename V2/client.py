@@ -147,7 +147,28 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 
     def _enter(self, room_code, is_create):
         try:
-            self.chat_room = ChatRoom(self.sock, self.user_id, self.user_name, room_code, is_create)
+            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
+            _send(sock, {"type": "register", "name": self.user_name})
+            msg = _recv(sock)
+            if msg.get("type") != "welcome" or "user_id" not in msg:
+                QtWidgets.QMessageBox.critical(self, "Error", "Registration failed")
+                return
+            user_id = msg["user_id"]
+            # Replace HomeWindow.sock with this new socket:
+            self.sock = sock
+            self.user_id = user_id
+        except Exception:
+            QtWidgets.QMessageBox.critical(self, "Error", "Could not connect to server")
+            return
+
+        try:
+            self.chat_room = ChatRoom(
+                self.sock,
+                self.user_id,
+                self.user_name,
+                room_code,
+                is_create
+            )
             self.chat_room.show()
             self.close()
         except Exception as e:
