@@ -5,12 +5,13 @@ import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyaudio
 
-from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
 from audio import AudioIO
 from gui.welcome import Ui_welcome
 from gui.home import Ui_home
 from gui.room import Ui_MainWindow
 
+
+from encryption import generate_rsa_keypair, rsa_encrypt, rsa_decrypt, xor_bytes
 
 import pathlib, os
 ROOT = pathlib.Path(__file__).resolve().parent           # V2 or gui
@@ -327,6 +328,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             QtWidgets.QMessageBox.No
         )
         if ans == QtWidgets.QMessageBox.Yes:
+            print("closing")
             self.close()  # triggers cleanup in closeEvent
 
     # ── outgoing audio / video ────────────────────────
