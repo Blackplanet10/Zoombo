@@ -266,10 +266,20 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 "name": self.user_name,
                 "public_key": self.public_key,
             })
-            msg = _recv(self.sock)
-            if msg.get("type") == "reject":
-                QtWidgets.QMessageBox.critical(self, "Server", msg.get("reason", "Join failed"))
-                raise Exception(msg.get("reason", "Join failed"))
+            while True:
+                msg = _recv(self.sock)
+                kind = msg.get("type")
+                if kind == "reject":
+                    QtWidgets.QMessageBox.critical(self, "Server", msg.get("reason", "Join failed"))
+                    raise Exception(msg.get("reason", "Join failed"))
+                elif kind == "sym_key":
+                    self.user_id = msg.get("user_id", self.user_id)
+                    self.sym_key = rsa_decrypt(msg["data"], self.private_key)
+                    self._start_audio()
+                    break
+                elif kind == "status":
+                    self._append_chat("System", msg.get("text", ""))
+                #handle other for later
 
         # 5—start receive thread
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
@@ -325,6 +335,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     def _change_devices(self):
         dlg = DeviceSelectDialog(self)
         cam, mic = dlg.get()
+        print(f"User selected camera index {cam}, mic index {mic}")
         if cam is None:
             return
         self._cam_idx, self._mic_idx = cam, mic

@@ -14,6 +14,7 @@ class AudioIO:
                  play_q: queue.Queue[tuple[bytes, float]],
                  input_dev: int | None = None,
                  output_dev: int | None = None):
+        print(f"Opening AudioIO with input_dev={input_dev}, output_dev={output_dev}")
         self.p = pyaudio.PyAudio()
         self.on_capture = on_capture
         self.play_q = play_q
