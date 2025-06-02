@@ -320,6 +320,13 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if not self._camera_on:
             self._show_blank(self.user_name)
 
+        _send(self.sock, {
+            "type": "camera",
+            "from": self.user_id,
+            "name": self.user_name,
+            "state": self._camera_on
+        })
+
     # ── mic click ─────────────────────────────────────────
     def _toggle_mic(self):
         self._mic_on = not self._mic_on
@@ -432,6 +439,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     self._append_chat(sender_name, msg["text"])
                 elif kind == "mute":
                     self._update_mute_badge(msg["from"], msg["state"])
+                elif kind == "camera":
+                    self._handle_camera_state(msg["from"], msg["state"])
                 elif kind == "join":
                     sender_id = msg.get("user_id")
                     sender_name = msg.get("name", sender_id)
@@ -460,7 +469,13 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if not view:
             return
         scn = QtWidgets.QGraphicsScene()
+        # Set gray background
         scn.setBackgroundBrush(QtGui.QColor("#4C2C76"))
+        # Optionally, show a camera-off pixmap in the center
+        icon_path = IMG("camera_gray.png")  # Add a suitable icon to your imgs/
+        if os.path.exists(icon_path):
+            pix = QtGui.QPixmap(icon_path)
+            scn.addPixmap(pix)
         view.setScene(scn)
         lbl = self._get_name_label(view)
         lbl.setText(sender)
@@ -525,8 +540,16 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             badge.move(view.x() + view.width() - badge.width() - 6,
                        view.y() + 6)
             badge.show()
+            print("showing badage")
         else:
             badge.hide()
+
+    def _handle_camera_state(self, sender: str, camera_on: bool):
+        if not camera_on:
+            self._show_blank(sender)
+        else:
+            # You may want to display a default image or wait for next frame.
+            pass
 
     # ── chat UI ───────────────────────────────────────
     def _append_chat(self, sender: str, text: str):
@@ -536,7 +559,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     def _show_frame(self, sender: str, frame):
         view = self._view_map.get(sender)
         if view is None and self._view_slots:
-            view = self._view_slots.pop(0);
+            view = self._view_slots.pop(0)
             self._view_map[sender] = view
         if view is None:
             return
@@ -559,10 +582,26 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         view.setResizeAnchor(QtWidgets.QGraphicsView.AnchorViewCenter)
         view.fitInView(item, QtCore.Qt.KeepAspectRatio)
 
-        #update mute icon
-        self._update_mute_badge(sender, sender != self.user_name and
-                                        not self._mic_on if sender == self.user_name else
-        getattr(self, "_remote_muted", {}).get(sender, False))
+        camera_off = not getattr(self, "_camera_states", {}).get(sender, True)
+        muted = getattr(self, "_remote_muted", {}).get(sender, False)
+        # Draw overlay badge/icon on top of the frame if needed
+        if camera_off:
+            # Show camera-off icon in center
+            icon_path = IMG("camera_gray.png")  # Add a suitable icon to your imgs/
+            if os.path.exists(icon_path):
+                icon_pix = QtGui.QPixmap(icon_path)
+                icon_item = scn.addPixmap(icon_pix)
+                icon_item.setOffset(
+                    (view.width() - icon_pix.width()) // 2,
+                    (view.height() - icon_pix.height()) // 2
+                )
+        elif muted:
+            # Show mute badge in a corner (e.g. top-right)
+            icon_path = IMG("mic_red.png")
+            if os.path.exists(icon_path):
+                icon_pix = QtGui.QPixmap(icon_path)
+                icon_item = scn.addPixmap(icon_pix)
+                icon_item.setOffset(view.width() - icon_pix.width() - 10, 10)
 
         # position / text of name overlay
         lbl = self._get_name_label(view)
