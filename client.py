@@ -5,6 +5,7 @@ import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyaudio
 
+
 from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
 from audio import AudioIO
 from gui.welcome import Ui_welcome
@@ -253,7 +254,9 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 kind = msg.get("type")
                 if kind == "sym_key":
                     self.user_id = msg.get("user_id", self.user_id)
-                    self.sym_key = rsa_decrypt(msg["data"], self.private_key)
+                    enc_b64 = msg["data"]
+                    enc_bytes = base64.b64decode(enc_b64)
+                    self.sym_key = rsa_decrypt(enc_bytes, self.private_key)
                     self._start_audio()
                 elif kind == "status":
                     self._append_chat("System", msg.get("text", ""))
@@ -274,7 +277,9 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     raise Exception(msg.get("reason", "Join failed"))
                 elif kind == "sym_key":
                     self.user_id = msg.get("user_id", self.user_id)
-                    self.sym_key = rsa_decrypt(msg["data"], self.private_key)
+                    enc_b64 = msg["data"]
+                    enc_bytes = base64.b64decode(enc_b64)
+                    self.sym_key = rsa_decrypt(enc_bytes, self.private_key)
                     self._start_audio()
                     break
                 elif kind == "status":
@@ -419,7 +424,9 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     self.user_id = msg.get("user_id", self.user_id)
                     self._user_names[self.user_id] = self.user_name
                     if kind == "sym_key" and "data" in msg:
-                        self.sym_key = rsa_decrypt(msg["data"], self.private_key)
+                        enc_b64 = msg["data"]
+                        enc_bytes = base64.b64decode(enc_b64)
+                        self.sym_key = rsa_decrypt(enc_bytes, self.private_key)
                         self._start_audio()
                     continue
 

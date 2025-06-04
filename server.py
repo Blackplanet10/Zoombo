@@ -3,6 +3,7 @@ from typing import Dict, List, Tuple
 from encryption import rsa_encrypt
 import string, random
 import secrets
+import base64
 
 
 with open("settings/server_settings.json") as f:
@@ -127,8 +128,9 @@ class Room:
                 cl.sock.close()
                 return False
             self.clients[cl.user_id] = cl
-        enc = rsa_encrypt(self.sym_key, pub_key)
-        cl.send({"type": "sym_key", "data": enc, "user_id": cl.user_id})
+        enc = rsa_encrypt(self.sym_key, pub_key)  # enc is bytes
+        enc_b64 = base64.b64encode(enc).decode('ascii')  # Convert bytes to base64 string
+        cl.send({"type": "sym_key", "data": enc_b64, "user_id": cl.user_id})
         self.broadcast({"type": "status", "text": f"{cl.name} joined.", "user_id": cl.user_id})
         return True
 
