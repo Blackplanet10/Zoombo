@@ -6,7 +6,7 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 import pyaudio
 
 
-from encryption import generate_rsa_keypair, rsa_decrypt, xor_bytes
+from encryption import generate_rsa_keypair, rsa_decrypt, aes_decrypt, aes_encrypt
 from audio import AudioIO
 from gui.welcome import Ui_welcome
 from gui.home import Ui_home
@@ -188,6 +188,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.audio_io: AudioIO | None = None
         self._pending_vid = collections.defaultdict(list)
         self.sock = sock
+        self.nonce = None
 
         # Generate keys early!
         self.public_key, self.private_key = generate_rsa_keypair()
@@ -382,7 +383,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_Q])
         if not ok:
             return
-        enc = xor_bytes(buf.tobytes(), self.sym_key)
+        enc = aes_encrypt(buf.tobytes(), self.sym_key, self.nonce)
         _send(self.sock, {"type": "frame",
                           "from": self.user_id, "name": self.user_name,
                           "ts": time.time(),
@@ -395,7 +396,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if not self._mic_on:
             pcm = b"-1"
 
-        enc = xor_bytes(pcm, self.sym_key)
+        enc = aes_encrypt(pcm, self.sym_key, self.nonce)
         _send(self.sock, {"type": "audio",
                               "from": self.user_id, "name": self.user_name,
                               "ts": time.time(),
@@ -427,6 +428,10 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                         enc_b64 = msg["data"]
                         enc_bytes = base64.b64decode(enc_b64)
                         self.sym_key = rsa_decrypt(enc_bytes, self.private_key)
+
+                        enc_nonce = msg["nonce"]
+                        enc_nonce_bytes = base64.b64decode(enc_nonce)
+                        self.nonce = bytes.fromhex(enc_nonce_bytes)
                         self._start_audio()
                     continue
 
@@ -517,7 +522,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def _handle_audio(self, sender: str, payload_b64: str, ts: float):
         raw = base64.b64decode(payload_b64)
-        pcm = xor_bytes(raw, self.sym_key)
+        pcm = aes_decrypt(raw, self.sym_key, self.nonce)
         try:
             self._play_q.put_nowait((pcm, ts))
         except queue.Full:
@@ -529,7 +534,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def _handle_frame(self, sender: str, payload_b64: str, ts: float):
         raw = base64.b64decode(payload_b64)
-        frame = cv2.imdecode(np.frombuffer(xor_bytes(raw, self.sym_key),
+        frame = cv2.imdecode(np.frombuffer(aes_decrypt(raw, self.sym_key, self.nonce),
                                            np.uint8), cv2.IMREAD_COLOR)
         if frame is not None:
             self._pending_vid[sender].append((ts, frame))

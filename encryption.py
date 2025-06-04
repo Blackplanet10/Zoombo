@@ -11,13 +11,12 @@ Functions:
 • generate_rsa_keypair(bits=512)     →  public, private key tuples
 • rsa_encrypt(message_bytes, pub)    →  bytes cipher
 • rsa_decrypt(cipher_bytes, priv)    →  original bytes
-• xor_bytes(data, key)               →  very simple stream cipher
 
 NOTE: For real-world security, use larger keys and authenticated encryption.
 """
 
 from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
+from Crypto.Cipher import PKCS1_OAEP, AES
 from typing import Tuple
 
 def generate_rsa_keypair(bits: int = 1024) -> Tuple[Tuple[int, int], Tuple[int, int]]:
@@ -61,14 +60,11 @@ def rsa_decrypt(cipher_bytes: bytes, priv: Tuple[int, int]) -> bytes:
     cipher = PKCS1_OAEP.new(key)
     return cipher.decrypt(cipher_bytes)
 
-def xor_bytes(data: bytes, key: bytes) -> bytes:
-    """
-    XOR a byte string with a (repeating) key. For demo use only.
-    Args:
-        data: Data to encrypt or decrypt.
-        key: Bytes key, cycled as needed.
-    Returns:
-        XOR'd bytes.
-    """
-    klen = len(key)
-    return bytes(b ^ key[i % klen] for i, b in enumerate(data))
+
+def aes_encrypt(data: bytes, key: bytes, nonce: bytes) -> bytes:
+    cipher = AES.new(key, AES.MODE_CTR, nonce=nonce)
+    return cipher.encrypt(data)
+
+def aes_decrypt(data: bytes, key: bytes, nonce: bytes) -> bytes:
+    cipher = AES.new(key, AES.MODE_CTR, nonce=nonce)
+    return cipher.decrypt(data)

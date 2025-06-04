@@ -118,6 +118,7 @@ class Room:
     def __init__(self, code):
         self.code = code
         self.sym_key = secrets.token_bytes(16)  # 128‑bit
+        self.nonce = secrets.token_bytes(8)      # 64‑bit nonce
         self.clients: Dict[str, Client] = {}
         self._lock = threading.Lock()
 
@@ -130,7 +131,7 @@ class Room:
             self.clients[cl.user_id] = cl
         enc = rsa_encrypt(self.sym_key, pub_key)  # enc is bytes
         enc_b64 = base64.b64encode(enc).decode('ascii')  # Convert bytes to base64 string
-        cl.send({"type": "sym_key", "data": enc_b64, "user_id": cl.user_id})
+        cl.send({"type": "sym_key", "data": enc_b64, "user_id": cl.user_id, "nonce": self.nonce.hex()})
         self.broadcast({"type": "status", "text": f"{cl.name} joined.", "user_id": cl.user_id})
         return True
 
