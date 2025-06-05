@@ -46,6 +46,7 @@ class Client(threading.Thread):
         self.name = None
         self.user_id = secrets.token_hex(16)  # Unique user ID
         self.pub_key = None
+        self.sym_key = None  # מפתח סימטרי פר session
 
     def run(self):
         try:
@@ -58,7 +59,17 @@ class Client(threading.Thread):
 
             self.user_id = secrets.token_hex(16)
             self.name = first["name"]
-            _send(self.sock, {"type": "welcome", "user_id": self.user_id})
+            self.pub_key = tuple(first["public_key"])
+
+            # --- צור ושלח מפתח סימטרי מוצפן כ-base64 ---
+            self.sym_key = secrets.token_bytes(16)
+            enc_key = rsa_encrypt(self.sym_key, self.pub_key)  # enc_key IS BYTES!
+            sym_key_b64 = base64.b64encode(enc_key).decode("ascii")
+            _send(self.sock, {
+                "type": "welcome",
+                "user_id": self.user_id,
+                "sym_key": sym_key_b64
+            })
 
             # 2. Wait for join/create_room request
             second = _recv(self.sock)
@@ -71,7 +82,6 @@ class Client(threading.Thread):
 
                 self.room_code = str(code)
                 self.name = second["name"]
-                self.pub_key = tuple(second["public_key"])
                 room = self.server.get_room(self.room_code, create=True)
                 room.add(self, self.pub_key)
                 _send(self.sock, {"type": "room_created", "room_code": code})
@@ -80,7 +90,6 @@ class Client(threading.Thread):
                 print(second)
                 self.room_code = second["room_code"].upper()
                 self.name = second["name"]
-                self.pub_key = tuple(second["public_key"])
                 # Only join if the room exists
                 if self.room_code not in self.server.rooms:
                     _send(self.sock, {"type": "reject", "reason": "Room does not exist"})
@@ -130,7 +139,7 @@ class Room:
                 return False
             self.clients[cl.user_id] = cl
         enc = rsa_encrypt(self.sym_key, pub_key)  # enc is bytes
-        enc_b64 = base64.b64encode(enc).decode('ascii')  # Convert bytes to base64 string
+        enc_b64 = base64.b64encode(enc).decode('ascii')
         cl.send({"type": "sym_key", "data": enc_b64, "user_id": cl.user_id, "nonce": self.nonce.hex()})
         self.broadcast({"type": "status", "text": f"{cl.name} joined.", "user_id": cl.user_id})
         return True

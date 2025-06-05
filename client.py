@@ -110,14 +110,15 @@ class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
             return
         try:
             sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-            _send(sock, {"type": "register", "name": name})
+            public_key, private_key = generate_rsa_keypair()
+            _send(sock, {"type": "register", "name": name, "public_key": public_key})
             msg = _recv(sock)
-            print(f"Received message: {msg}")
             if msg.get("type") == "welcome" and "user_id" in msg:
-                print("approved server registration")
                 user_id = msg["user_id"]
-                self.home = HomeWindow(sock, name, user_id)
-                print(f"Connected as {name} (ID: {user_id})")
+                enc_key_b64 = msg["sym_key"]
+                enc_key_bytes = base64.b64decode(enc_key_b64)
+                sym_key = rsa_decrypt(enc_key_bytes, private_key)
+                self.home = HomeWindow(sock, name, user_id, sym_key, private_key)
                 self.home.show()
                 self.close()
             else:
@@ -127,15 +128,16 @@ class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
 
 
 class HomeWindow(QtWidgets.QMainWindow, Ui_home):
-    def __init__(self, sock, user_name, user_id):
-        super().__init__(); self.setupUi(self)
+    def __init__(self, sock, user_name, user_id, sym_key, private_key):
+        super().__init__();
+        self.setupUi(self)
         self.sock = sock
         self.user_name = user_name
         self.user_id = user_id
+        self.sym_key = sym_key
+        self.private_key = private_key
         self.connectButton.clicked.connect(self._join)
         self.connectButton_2.clicked.connect(self._create)
-        print(f"HomeWindow initialized with socket {sock}, user_name {user_name}, user_id {user_id}")
-
 
     def _join(self):
         code = self.Name.text().strip().upper()
@@ -147,34 +149,23 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 
     def _enter(self, room_code, is_create):
         try:
-            self.chat_room = ChatRoom(self.sock, self.user_id, self.user_name, room_code, is_create)
+            # Always pass the same sock, sym_key, private_key
+            self.chat_room = ChatRoom(
+                self.sock, self.user_id, self.user_name, room_code, is_create,
+                sym_key=self.sym_key, private_key=self.private_key
+            )
             self.chat_room.show()
             self.close()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Room Error", str(e))
-            # Close the current socket, it may be dead
-            try: self.sock.close()
-            except Exception: pass
-            # Create a new socket for next attempt
-            try:
-                sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-                _send(sock, {"type": "register", "name": self.user_name})
-                msg = _recv(sock)
-                if msg.get("type") == "welcome" and "user_id" in msg:
-                    self.sock = sock
-                    self.user_id = msg["user_id"]
-                else:
-                    raise Exception("Registration failed")
-            except Exception:
-                QtWidgets.QMessageBox.critical(self, "Error", "Could not reconnect to server")
-                self.sock = None
+
 
 
 # ───────────────────  CHAT ROOM  ──────────────────────
 class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     frame_ready = QtCore.pyqtSignal(str, object)
 
-    def __init__(self, sock, user_id: str, user_name: str, room_code: str = None, is_create: bool = False, cam_idx: int = 0, mic_idx: int = None):
+    def __init__(self, sock, user_id: str, user_name: str, room_code: str = None, is_create: bool = False, cam_idx: int = 0, mic_idx: int = None, sym_key: bytes = None, private_key=None):
         super().__init__();
         self.setupUi(self)
 
@@ -190,9 +181,9 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.sock = sock
         self.nonce = None
 
-        # Generate keys early!
-        self.public_key, self.private_key = generate_rsa_keypair()
-        self.sym_key: bytes | None = None
+        self.private_key = private_key
+        self.sym_key: bytes | None = sym_key
+
 
         # 2—GUI wiring
         self.setWindowTitle(
@@ -234,7 +225,6 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 "type": "create_room",
                 "user_id": self.user_id,
                 "name": self.user_name,
-                "public_key": self.public_key,
             })
             initial_responses = []
             while True:
@@ -268,7 +258,6 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 "room_code": self.room_code,
                 "user_id": self.user_id,
                 "name": self.user_name,
-                "public_key": self.public_key,
             })
             while True:
                 msg = _recv(self.sock)
@@ -636,27 +625,16 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 self.cap.release()
             if self.audio_io:
                 self.audio_io.close()
-            # Send explicit leave message to server
             _send(self.sock, {
                 "type": "leave",
                 "user_id": self.user_id,
                 "room_code": self.room_code
             })
-            self.sock.close()  # <--- Properly close the socket here!
         except Exception:
             pass
 
-        # Now create a new connection for HomeWindow
-        try:
-            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-            _send(sock, {"type": "register", "name": self.user_name})
-            msg = _recv(sock)
-            if msg.get("type") == "welcome" and "user_id" in msg:
-                user_id = msg["user_id"]
-                self.home = HomeWindow(sock, self.user_name, user_id)
-                self.home.show()
-        except Exception:
-            QtWidgets.QMessageBox.critical(self, "Error", "Could not reconnect to server")
+        self.home = HomeWindow(self.sock, self.user_name, self.user_id, self.sym_key, self.private_key)
+        self.home.show()
         super().closeEvent(ev)
 
 
