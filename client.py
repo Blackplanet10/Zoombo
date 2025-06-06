@@ -590,11 +590,15 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if not camera_on:
             self._show_blank(sender)
         else:
-            # You may want to display a default image or wait for next frame.
             pass
 
     # ── chat UI ───────────────────────────────────────
     def _append_chat(self, sender: str, text: str):
+        try:
+            sender = self._user_names[sender]
+        except KeyError:
+            # If cant get name fall back to use ID
+            sender = sender
         self.textBrowser.append(f"<b>{escape(sender)}:</b> {escape(text)}")
 
     # ── video display ─────────────────────────────────
@@ -605,6 +609,13 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             self._view_map[sender] = view
         if view is None:
             return
+
+        try:
+            sender = self._user_names[sender]
+        except KeyError:
+            # If cant get name fall back to use ID
+            sender = sender
+
 
         lbl = self._get_name_label(view)
         lbl.setText(sender)
