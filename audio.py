@@ -69,5 +69,8 @@ class AudioIO:
                 pass
 
     def close(self):
-        self._running = False; time.sleep(0.2)
-        self.in_stream.close(); self.out_stream.close(); self.p.terminate()
+        self._running = False
+        time.sleep(0.2)
+        # self.in_stream.close()
+        # self.out_stream.close();
+        # self.p.terminate()

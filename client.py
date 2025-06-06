@@ -142,7 +142,7 @@ class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
 class HomeWindow(QtWidgets.QMainWindow, Ui_home):
     def __init__(self, user_name: str):
         print("DEBUG(Home): initializing HomeWindow with user_name:", user_name)
-        super().__init__();
+        super().__init__()
         self.setupUi(self)
 
         # Initialize an empty room symmetric key
@@ -263,7 +263,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                  room_code: str,
                  sym_key: bytes,
                  nonce: bytes | None):
-        super().__init__(); self.setupUi(self)
+        super().__init__();
+        self.setupUi(self)
 
 
         # ─── 1) State ────────────────────────────────────────────────────────────
@@ -274,6 +275,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.sym_key = sym_key          # <-- The ROOM’s AES key
         self.nonce = nonce              # <-- The ROOM’s AES nonce
         self._user_names = {user_id: user_name}
+        self.terminating = False
 
         # non communication veriables
 
@@ -288,6 +290,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.setWindowTitle(f"Room {room_code} – {user_name}")
         self.label.setText(f"ROOM ID: {room_code}")
         self.frame_ready.connect(self._show_frame)
+        self.home_window = None
 
         self._force_close = False
         self._camera_on = True
@@ -389,13 +392,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
     # ───────────────── leave helper ─────────────────────
     def _confirm_leave(self):
-        ans = QtWidgets.QMessageBox.question(
-            self, "Leave room", "Are you sure you want to leave the call?",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No
-        )
-        if ans == QtWidgets.QMessageBox.Yes:
-            self.close()  # triggers cleanup in closeEvent
+        # triggers cleanup in closeEvent.
+        self.close()
 
     # ── outgoing audio / video ────────────────────────
     def _start_audio(self):
@@ -456,7 +454,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     # Receive a message from the server and decrypt
                     msg = _recv_encrypted(self.sock, self.sym_key, self.nonce)
                 except ConnectionError:
-                    QtWidgets.QMessageBox.critical(self, "Connection Error", "Lost connection to the server.")
+                    if not self.terminating:
+                        QtWidgets.QMessageBox.critical(self, "Connection Error", "Lost connection to the server.")
                     break
 
                 # For join/leave/status/chat, always update mapping
@@ -661,41 +660,32 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
         # When user leaves, notify server, then jump back to Home
         try:
+            self.terminating = True
+            # 2) Then, stop the camera timer and release camera
+            self._frame_timer.stop()
+            if self.cap and self.cap.isOpened():
+                self.cap.release()
+
+            # 3) Now stop the audio capture thread.
+            if self.audio_io:
+                self.audio_io.close()
+
             _send_encrypted(self.sock, {
                 "type": "leave",
                 "user_id": self.user_id,
                 "room_code": self.room_code
             }, self.sym_key, self.nonce)
-        except Exception:
-            pass
-
-            # 2) Then, stop the camera timer and release camera
-        try:
-            self._frame_timer.stop()
-            self.cap.release()
-        except Exception:
-            pass
-
-            # 3) Now stop the audio capture thread
-        try:
-            # This calls AudioIO.close(), which sets _running=False and joins the thread
-            self.audio_io.close()
-        except Exception:
-                pass
-
-        try:
             self.sock.close()
-        except Exception:
-            pass
 
-        print("opening home window")
+            self.home_window = HomeWindow(self.user_name)
+            self.home_window.show()
 
-        self.home = HomeWindow(self.user_name)
-        self.home.show()
-
-
-        # Allow the QMainWindow to close
-        super().closeEvent(ev)
+            # Allow the QMainWindow to close
+            super().closeEvent(ev)
+        except Exception as e:
+            print("Error closing ChatRoom Window: ", e)
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to leave room: {str(e)}")
+            ev.ignore()
 
 
 # ───────────────── entry‑point ────────────────────────
