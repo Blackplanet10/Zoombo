@@ -415,14 +415,13 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if not ok2:
             return
 
-        # **Encrypt the raw JPEG bytes with room AES key + nonce**
-        enc = aes_encrypt(buf.tobytes(), self.sym_key, self.nonce)
+        # Turn the frame into a base64-encoded string
         _send_encrypted(self.sock, {
             "type": "frame",
             "from": self.user_id,
             "name": self.user_name,
             "ts": time.time(),
-            "data": base64.b64encode(enc).decode()
+            "data": base64.b64encode(buf.tobytes()).decode()
         }, self.sym_key, self.nonce)
         self.frame_ready.emit(self.user_name, cv2.flip(frame, 1))
 
@@ -432,12 +431,11 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         if not self._mic_on:
             pcm = b"-1"
 
-        enc = aes_encrypt(pcm, self.sym_key, self.nonce)
         _send_encrypted(self.sock, {
             "type": "audio",
             "from": self.user_id, "name": self.user_name,
             "ts": time.time(),
-            "data": base64.b64encode(enc).decode()}, self.sym_key, self.nonce)
+            "data": base64.b64encode(pcm).decode()}, self.sym_key, self.nonce)
 
     # ── outgoing text chat ────────────────────────────
     def _send_text(self):
@@ -554,7 +552,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def _handle_audio(self, sender: str, payload_b64: str, ts: float):
         raw = base64.b64decode(payload_b64)
-        pcm = aes_decrypt(raw, self.sym_key, self.nonce)
+        pcm = raw
         try:
             self._play_q.put_nowait((pcm, ts))
         except queue.Full:
@@ -566,8 +564,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
 
     def _handle_frame(self, sender: str, payload_b64: str, ts: float):
         raw = base64.b64decode(payload_b64)
-        frame = cv2.imdecode(np.frombuffer(aes_decrypt(raw, self.sym_key, self.nonce),
-                                           np.uint8), cv2.IMREAD_COLOR)
+        frame = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
         if frame is not None:
             self._pending_vid[sender].append((ts, frame))
 
