@@ -275,6 +275,13 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         self.nonce = nonce              # <-- The ROOM’s AES nonce
         self._user_names = {user_id: user_name}
 
+        # non communication veriables
+
+        self._cam_idx, self._mic_idx = 0, 0
+        self._play_q: queue.Queue[tuple[bytes, float]] = queue.Queue(maxsize=20)
+        self.audio_io: AudioIO | None = None
+        self._pending_vid = collections.defaultdict(list)
+
         print(f"DEBUG(ChatRoom): user_id={user_id}, user_name={user_name}, room_code={room_code}")
 
         # ─── 2) UI setup ──────────────────────────────────────────────────────────
