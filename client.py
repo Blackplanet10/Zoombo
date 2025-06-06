@@ -457,11 +457,12 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     try:
                         enc_blob = base64.b64decode(msg["data"])
                         plain = aes_decrypt(enc_blob, self.sym_key, self.nonce)
-                        inner = json.loads(plain.decode())
+                        msg = json.loads(plain.decode())
                     except Exception:
                         continue
 
-                    kind = inner.get("type")
+                    kind = msg.get("type")
+
 
 
                 # get key when welcome
