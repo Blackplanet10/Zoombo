@@ -40,6 +40,20 @@ class AudioIO:
             data = self.in_stream.read(CHUNK, exception_on_overflow=False)
             self.on_capture(data)
 
+        try:
+            while self._running:
+                data = self.in_stream.read(CHUNK, exception_on_overflow=False)
+                if not self._running:
+                    break
+                self.on_capture(data)
+        finally:
+            try:
+                self.in_stream.stop_stream()
+                self.in_stream.close()
+            except Exception:
+                pass
+            self.p.terminate()
+
     def _play_loop(self):
         DELAY = 0.06  # 60ms sync cushion
         while self._running:

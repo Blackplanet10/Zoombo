@@ -1,6 +1,6 @@
 import socket, threading, json, struct, secrets
 from typing import Dict, List, Tuple
-from encryption import rsa_encrypt
+from encryption import rsa_encrypt, aes_encrypt, rsa_decrypt
 import string, random
 import secrets
 import base64
@@ -84,13 +84,13 @@ class Client(threading.Thread):
                 self.name = second["name"]
                 room = self.server.get_room(self.room_code, create=True)
                 room.add(self, self.pub_key)
+                print("Room created:", self.room_code)
                 _send(self.sock, {"type": "room_created", "room_code": code})
 
             elif second["type"] == "join":
                 print(second)
                 self.room_code = second["room_code"].upper()
                 self.name = second["name"]
-                # Only join if the room exists
                 if self.room_code not in self.server.rooms:
                     _send(self.sock, {"type": "reject", "reason": "Room does not exist"})
                     self.sock.close()
@@ -98,7 +98,6 @@ class Client(threading.Thread):
                 room = self.server.get_room(self.room_code, create=False)
                 if not room.add(self, self.pub_key):
                     return
-                # Optionally: send confirmation message here if needed
             else:
                 _send(self.sock, {"type": "reject", "reason": "Must join or create room after registration"})
                 self.sock.close()
@@ -126,33 +125,94 @@ class Client(threading.Thread):
 class Room:
     def __init__(self, code):
         self.code = code
-        self.sym_key = secrets.token_bytes(16)  # 128‑bit
-        self.nonce = secrets.token_bytes(8)      # 64‑bit nonce
+        self.sym_key = secrets.token_bytes(16)  # 128-bit AES
+        self.nonce = secrets.token_bytes(8)  # 64-bit CTR nonce
         self.clients: Dict[str, Client] = {}
         self._lock = threading.Lock()
 
-    def add(self, cl: Client, pub_key):
+    def add(self, cl: "Client", pub_key):
+        """
+        1) Add `cl` to this room’s client list.
+        2) Send a plaintext {type:"sym_key", …} so the client can decrypt under RSA.
+        3) Immediately send exactly one AES‐encrypted blob (type="aes_blob") containing
+           {"type":"room_created","room_code":…,"initial_status":…,"user_id":…}.
+        4) Broadcast the same “status” under AES to any existing members.
+        """
+
         with self._lock:
             if len(self.clients) >= 4:
                 cl.send({"type": "reject", "reason": "Room is full"})
                 cl.sock.close()
                 return False
             self.clients[cl.user_id] = cl
-        enc = rsa_encrypt(self.sym_key, pub_key)  # enc is bytes
-        enc_b64 = base64.b64encode(enc).decode('ascii')
-        cl.send({"type": "sym_key", "data": enc_b64, "user_id": cl.user_id, "nonce": self.nonce.hex()})
-        self.broadcast({"type": "status", "text": f"{cl.name} joined.", "user_id": cl.user_id})
+
+        # 2) Send RSA‐wrapped AES key (sym_key) + nonce (hex)
+        enc = rsa_encrypt(self.sym_key, pub_key)
+        enc_b64 = base64.b64encode(enc).decode("ascii")
+        cl.send({
+            "type": "sym_key",
+            "data": enc_b64,
+            "user_id": cl.user_id,
+            "nonce": self.nonce.hex()
+        })
+
+        # 3) Build the inner JSON and AES‐encrypt it under (sym_key, nonce)
+        inner = {
+            "type": "room_created",
+            "room_code": self.code,
+            "initial_status": f"{cl.name} joined.",
+            "user_id": cl.user_id
+        }
+        self.broadcast_encrypted(inner)
+
+        # inner_json = json.dumps(inner).encode()
+        # aes_blob = aes_encrypt(inner_json, self.sym_key, self.nonce)
+        # aes_b64 = base64.b64encode(aes_blob).decode("ascii")
+        #
+        # # Send it as one AES‐encrypted envelope:
+        # cl.send({
+        #     "type": "aes_blob",
+        #     "data": aes_b64
+        # })
+
+        # 4) Broadcast the same “status” to everyone already in the room (AES‐encrypted).
+        status_payload = {
+            "type": "status",
+            "text": f"{cl.name} joined.",
+            "user_id": cl.user_id
+        }
+        self.broadcast_encrypted(status_payload)
+
         return True
 
-    def drop(self, cl: Client):
+    def broadcast_encrypted(self, payload: dict):
+        """
+        Encrypt `payload` under this room’s AES key/nonce, then send to all clients in the room.
+        """
+        blob = json.dumps(payload).encode()
+        enc = aes_encrypt(blob, self.sym_key, self.nonce)
+        enc_b64 = base64.b64encode(enc).decode("ascii")
+        msg = {"type": "aes_blob", "data": enc_b64}
+
         with self._lock:
-            self.clients.pop(cl.user_id, None)
+            for c in self.clients.values():
+                c.send(msg)
+
+    def drop(self, cl: "Client"):
+        with self._lock:
+            if cl.user_id in self.clients:
+                self.clients.pop(cl.user_id, None)
+        # Plaintext "leave" is fine (or you could AES-encrypt it if you prefer)
         self.broadcast({"type": "leave", "from": cl.user_id, "name": cl.name})
 
-    def broadcast(self, msg, exclude=None):
-        for c in list(self.clients.values()):
-            if c is not exclude:
-                 c.send(msg)
+    def broadcast(self, msg: dict, exclude: "Client" = None):
+        """
+        Plaintext broadcast (used for "leave" or any non‐AES messages).
+        """
+        with self._lock:
+            for c in list(self.clients.values()):
+                if c is not exclude:
+                    c.send(msg)
 
 class Server:
     def __init__(self):

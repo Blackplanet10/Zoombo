@@ -1,6 +1,8 @@
 from __future__ import annotations
 import sys, json, struct, socket, threading, base64, secrets, queue, time, collections
 from html import escape
+from typing import final
+
 import cv2, numpy as np
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyaudio
@@ -108,54 +110,142 @@ class WelcomeWindow(QtWidgets.QMainWindow, Ui_welcome):
         if not name:
             self.warning.setText("Enter your name")
             return
-        try:
-            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
-            public_key, private_key = generate_rsa_keypair()
-            _send(sock, {"type": "register", "name": name, "public_key": public_key})
-            msg = _recv(sock)
-            if msg.get("type") == "welcome" and "user_id" in msg:
-                user_id = msg["user_id"]
-                enc_key_b64 = msg["sym_key"]
-                enc_key_bytes = base64.b64decode(enc_key_b64)
-                sym_key = rsa_decrypt(enc_key_bytes, private_key)
-                self.home = HomeWindow(sock, name, user_id, sym_key, private_key)
-                self.home.show()
-                self.close()
-            else:
-                QtWidgets.QMessageBox.critical(self, "Error", "Registration failed")
-        except Exception:
-            QtWidgets.QMessageBox.critical(self, "Error", "Could not connect to server")
+
+        # Pass name to homewindow
+        self.home = HomeWindow(name)
+        self.home.show()
+        self.close()
 
 
 class HomeWindow(QtWidgets.QMainWindow, Ui_home):
-    def __init__(self, sock, user_name, user_id, sym_key, private_key):
+    def __init__(self, user_name: str):
+        print("DEBUG(Home): initializing HomeWindow with user_name:", user_name)
         super().__init__();
         self.setupUi(self)
-        self.sock = sock
+
         self.user_name = user_name
-        self.user_id = user_id
-        self.sym_key = sym_key
-        self.private_key = private_key
+
         self.connectButton.clicked.connect(self._join)
         self.connectButton_2.clicked.connect(self._create)
 
     def _join(self):
         code = self.Name.text().strip().upper()
-        if code:
-            self._enter(code, is_create=False)
+        if not code:
+            return
+        self._enter(room_code=code, is_create=False)
 
     def _create(self):
-        self._enter(None, is_create=True)
+        # room_code can be None when creating
+        self._enter(room_code=None, is_create=True)
 
-    def _enter(self, room_code, is_create):
+    def _enter(self, room_code: str | None, is_create: bool):
         try:
-            # Always pass the same sock, sym_key, private_key
+            sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
+            public_key, private_key = generate_rsa_keypair()
+
+            # 1) REGISTER (plaintext) → get {"type":"welcome", …}
+            _send(sock, {
+                "type": "register",
+                "name": self.user_name,
+                "public_key": public_key
+            })
+            welcome = _recv(sock)
+            if welcome.get("type") != "welcome":
+                raise Exception("Registration failed")
+
+            user_id = welcome["user_id"]
+            enc_session = base64.b64decode(welcome["sym_key"])
+            session_key = rsa_decrypt(enc_session, private_key)
+            # (We ignore session_key beyond satisfying the protocol.)
+
+            # 2) SEND create_room / join (plaintext)
+            if is_create:
+                _send(sock, {
+                    "type": "create_room",
+                    "name": self.user_name,
+                    "user_id": user_id
+                })
+            else:
+                _send(sock, {
+                    "type": "join",
+                    "room_code": room_code,
+                    "name": self.user_name,
+                    "user_id": user_id
+                })
+
+            # 3a) WAIT for plaintext "sym_key"
+            room_sym_key = None
+            nonce_bytes = None
+            final_room = room_code
+
+
+            while True:
+                response = _recv(sock)
+                kind = response.get("type")
+
+                if kind == "reject":
+                    raise Exception(response.get("reason", "Join/create failed"))
+
+                if kind == "room_created":
+                    # only if you created the room; record its code and keep looping
+                    final_room = response["room_code"]
+                    continue
+
+                if kind == "sym_key":
+                    # Decrypt AES key
+                    enc_room_b64 = response["data"]
+                    enc_room = base64.b64decode(enc_room_b64)
+                    room_sym_key = rsa_decrypt(enc_room, private_key)
+
+                    # Parse nonce from hex→bytes
+                    nonce_hex = response.get("nonce", "")
+                    if not nonce_hex:
+                        raise Exception("No nonce from server")
+                    nonce_bytes = bytes.fromhex(nonce_hex)
+                    break
+
+                # ignore any stray "status" that might slip in plaintext
+                continue
+
+
+
+            # 3b) WAIT for exactly one AES‐encrypted blob containing "room_created"+"initial_status"
+            while True:
+                response = _recv(sock)
+                if response.get("type") != "aes_blob":
+                    # not the right envelope—ignore until we get one
+                    continue
+                enc_blob = base64.b64decode(response["data"])
+                plain = aes_decrypt(enc_blob, room_sym_key, nonce_bytes)
+                inner = json.loads(plain.decode())
+
+                if inner.get("type") != "room_created":
+                    # if somehow it's not "room_created", ignore
+                    continue
+
+                # Now we have: {"type":"room_created","room_code":…,"initial_status":…,"user_id":…}
+                final_room = inner["room_code"]
+                initial_stat = inner.get("initial_status", "")
+                # (Optionally display initial_stat in HomeWindow or print it)
+                print(f"DEBUG(Home): initial_status = {initial_stat}")
+                break
+
+                # Sanity check
+                if room_sym_key is None or nonce_bytes is None or (not final_room):
+                    raise Exception("Failed to negotiate room key")
+            # 4) Launch ChatRoom with AES key + nonce
             self.chat_room = ChatRoom(
-                self.sock, self.user_id, self.user_name, room_code, is_create,
-                sym_key=self.sym_key, private_key=self.private_key
+                sock=sock,
+                user_id=user_id,
+                user_name=self.user_name,
+                room_code=final_room,
+                sym_key=room_sym_key,
+                nonce=nonce_bytes,
+                private_key=private_key
             )
             self.chat_room.show()
             self.close()
+
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Room Error", str(e))
 
@@ -165,36 +255,37 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     frame_ready = QtCore.pyqtSignal(str, object)
 
-    def __init__(self, sock, user_id: str, user_name: str, room_code: str = None, is_create: bool = False, cam_idx: int = 0, mic_idx: int = None, sym_key: bytes = None, private_key=None):
-        super().__init__();
-        self.setupUi(self)
+    def __init__(self,
+                 sock: socket.socket,
+                 user_id: str,
+                 user_name: str,
+                 room_code: str,
+                 sym_key: bytes,
+                 nonce: bytes,
+                 private_key):
+        super().__init__(); self.setupUi(self)
 
-        # 1—state used by threads (must exist first)
-        self.user_id = user_id
-        self._user_names: dict[str, str] = {user_id: user_name}  # user_id -> display name
-        self.user_name, self.room_code = user_name, room_code
-        self._cam_idx, self._mic_idx = cam_idx, mic_idx
-        self._camera_on, self._mic_on = True, True
-        self._play_q: queue.Queue[tuple[bytes, float]] = queue.Queue(maxsize=20)
-        self.audio_io: AudioIO | None = None
-        self._pending_vid = collections.defaultdict(list)
+
+        # ─── 1) State ────────────────────────────────────────────────────────────
         self.sock = sock
-        self.nonce = None
+        self.user_id = user_id
+        self.user_name = user_name
+        self.room_code = room_code
+        self.sym_key = sym_key          # <-- The ROOM’s AES key
+        self.nonce = nonce              # <-- The ROOM’s AES nonce
+        self.private_key = private_key  # <-- We keep this only if you expect any future RSA decrypts
+        self._user_names = {user_id: user_name}
 
-        self.private_key = private_key
-        self.sym_key: bytes | None = sym_key
+        print(f"DEBUG(ChatRoom): user_id={user_id}, user_name={user_name}, room_code={room_code}")
 
-
-        # 2—GUI wiring
-        self.setWindowTitle(
-            f"Room {room_code} – {user_name}" if room_code and not is_create else "Creating room…"
-        )
-        self.label.setText(
-            f"ROOM ID: {room_code}" if room_code and not is_create else "Creating room…"
-        )
+        # ─── 2) UI setup ──────────────────────────────────────────────────────────
+        self.setWindowTitle(f"Room {room_code} – {user_name}")
+        self.label.setText(f"ROOM ID: {room_code}")
         self.frame_ready.connect(self._show_frame)
 
-        self._force_close = False  # Leave button sets this
+        self._force_close = False
+        self._camera_on = True
+        self._mic_on = True
 
         # mute / camera Toggles
         self.micButton.toggled.connect(self._toggle_mic)
@@ -218,72 +309,16 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         ]
         self._view_map: dict[str, QtWidgets.QGraphicsView] = {}
 
-        # --- ONLY ONE block for join/create ---
-        if is_create:
-            print("creating room")
-            _send(self.sock, {
-                "type": "create_room",
-                "user_id": self.user_id,
-                "name": self.user_name,
-            })
-            initial_responses = []
-            while True:
-                msg = _recv(self.sock)
-                kind = msg.get("type")
-                initial_responses.append(msg)
-                if kind == "room_created":
-                    self.room_code = msg["room_code"]
-                    self.setWindowTitle(f"Room {self.room_code} – {user_name}")
-                    self.label.setText(f"ROOM ID: {self.room_code}")
-                    break
-                elif kind == "reject":
-                    QtWidgets.QMessageBox.critical(self, "Server", msg.get("reason", "Room creation failed"))
-                    raise Exception(msg.get("reason", "Room creation failed"))
-
-            # Now process any initial responses (sym_key, status, etc) in the order received
-            for msg in initial_responses:
-                kind = msg.get("type")
-                if kind == "sym_key":
-                    self.user_id = msg.get("user_id", self.user_id)
-                    enc_b64 = msg["data"]
-                    enc_bytes = base64.b64decode(enc_b64)
-                    self.sym_key = rsa_decrypt(enc_bytes, self.private_key)
-                    self._start_audio()
-                elif kind == "status":
-                    self._append_chat("System", msg.get("text", ""))
-                # Add more as needed for your protocol
-        else:
-            _send(self.sock, {
-                "type": "join",
-                "room_code": self.room_code,
-                "user_id": self.user_id,
-                "name": self.user_name,
-            })
-            while True:
-                msg = _recv(self.sock)
-                kind = msg.get("type")
-                if kind == "reject":
-                    QtWidgets.QMessageBox.critical(self, "Server", msg.get("reason", "Join failed"))
-                    raise Exception(msg.get("reason", "Join failed"))
-                elif kind == "sym_key":
-                    self.user_id = msg.get("user_id", self.user_id)
-                    enc_b64 = msg["data"]
-                    enc_bytes = base64.b64decode(enc_b64)
-                    self.sym_key = rsa_decrypt(enc_bytes, self.private_key)
-                    self._start_audio()
-                    break
-                elif kind == "status":
-                    self._append_chat("System", msg.get("text", ""))
-                #handle other for later
-
-        # 5—start receive thread
         self._recv_thread = threading.Thread(target=self._recv_loop, daemon=True)
         self._recv_thread.start()
 
-        # 6-camera
-        self._open_camera(cam_idx)
+        self._play_q = queue.Queue(maxsize=20)
 
-        # 7-timer for outgoing frames
+
+        # ─── 4) Open camera / start timers / start audio if needed ───────────────
+        self._open_camera(0)  # or whatever cam_idx you want by default
+        self.audio_io = AudioIO(self._send_audio_chunk, self._play_q, input_dev=None)
+
         self._frame_timer = QtCore.QTimer(self)
         self._frame_timer.timeout.connect(self._capture_frame)
         self._frame_timer.start(int(1000 / TARGET_FPS))
@@ -363,20 +398,26 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                                     input_dev=self._mic_idx)
 
     def _capture_frame(self):
-        if self.sym_key is None or not self._camera_on or not self.cap.isOpened():
+        if not self._camera_on or not hasattr(self, "cap") or not self.cap.isOpened():
             return
         ok, frame = self.cap.read()
         if not ok:
             return
         frame = cv2.resize(frame, (WIDTH, HEIGHT))
-        ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_Q])
-        if not ok:
+        # Encode JPEG
+        ok2, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_Q])
+        if not ok2:
             return
+
+        # **Encrypt the raw JPEG bytes with room AES key + nonce**
         enc = aes_encrypt(buf.tobytes(), self.sym_key, self.nonce)
-        _send(self.sock, {"type": "frame",
-                          "from": self.user_id, "name": self.user_name,
-                          "ts": time.time(),
-                          "data": base64.b64encode(enc).decode()})
+        _send(self.sock, {
+            "type": "frame",
+            "from": self.user_id,
+            "name": self.user_name,
+            "ts": time.time(),
+            "data": base64.b64encode(enc).decode()
+        })
         self.frame_ready.emit(self.user_name, cv2.flip(frame, 1))
 
     def _send_audio_chunk(self, pcm: bytes):
@@ -406,8 +447,22 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
     def _recv_loop(self):
         try:
             while True:
-                msg = _recv(self.sock)
+                try:
+                    msg = _recv(self.sock)
+                except ConnectionError:
+                    break
                 kind = msg.get("type")
+
+                if kind == "aes_blob":
+                    try:
+                        enc_blob = base64.b64decode(msg["data"])
+                        plain = aes_decrypt(enc_blob, self.sym_key, self.nonce)
+                        inner = json.loads(plain.decode())
+                    except Exception:
+                        continue
+
+                    kind = inner.get("type")
+
 
                 # get key when welcome
                 if kind in ("welcome", "sym_key"):
@@ -456,6 +511,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     QtWidgets.QMessageBox.critical(self, "Join failed", reason)
                     self.close()
                     return
+
         except ConnectionError:
             pass
 
@@ -619,12 +675,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                 ev.ignore()
                 return
 
+        # When user leaves, notify server, then jump back to Home
         try:
-            self._frame_timer.stop()
-            if hasattr(self, 'cap') and self.cap.isOpened():
-                self.cap.release()
-            if self.audio_io:
-                self.audio_io.close()
             _send(self.sock, {
                 "type": "leave",
                 "user_id": self.user_id,
@@ -633,8 +685,32 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         except Exception:
             pass
 
-        self.home = HomeWindow(self.sock, self.user_name, self.user_id, self.sym_key, self.private_key)
+            # 2) Then, stop the camera timer and release camera
+        try:
+            self._frame_timer.stop()
+            self.cap.release()
+        except Exception:
+            pass
+
+            # 3) Now stop the audio capture thread
+        try:
+            # This calls AudioIO.close(), which sets _running=False and joins the thread
+            self.audio_io.close()
+        except Exception:
+                pass
+
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+        print("opening home window")
+
+        self.home = HomeWindow(self.user_name)
         self.home.show()
+
+
+        # Allow the QMainWindow to close
         super().closeEvent(ev)
 
 
