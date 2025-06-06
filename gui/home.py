@@ -17,14 +17,16 @@ IMG  = lambda n: os.fspath(ROOT / ("imgs" if ROOT.name == "gui" else "gui/imgs")
 
 class Ui_home(object):
     def setupUi(self, home):
+
         home.setObjectName("home")
         home.resize(671, 712)
         home.setMinimumSize(QtCore.QSize(671, 712))
         home.setMaximumSize(QtCore.QSize(671, 712))
         home.setStyleSheet("background-color: rgb(120, 81, 169);\n"
-"\n"
+"\n"        
 "\n"
 "")
+
         self.centralwidget = QtWidgets.QWidget(home)
         self.centralwidget.setObjectName("centralwidget")
         self.logo = QtWidgets.QLabel(self.centralwidget)
@@ -125,7 +127,7 @@ class Ui_home(object):
     def retranslateUi(self, home):
         _translate = QtCore.QCoreApplication.translate
         home.setWindowTitle(_translate("home", "MainWindow"))
-        self.label.setText(_translate("home", "Hello {name} !"))
+        self.label.setText(_translate("home", f"Hello {home.user_name}!"))
         self.connectButton.setText(_translate("home", "Join Room"))
         self.Name.setPlaceholderText(_translate("home", "Room Code"))
         self.connectButton_2.setText(_translate("home", "Create New Room"))

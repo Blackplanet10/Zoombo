@@ -143,17 +143,21 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
     def __init__(self, user_name: str):
         print("DEBUG(Home): initializing HomeWindow with user_name:", user_name)
         super().__init__()
+
+        #First of all set name for home window to display
+        self.user_name = user_name
         self.setupUi(self)
 
         # Initialize an empty room symmetric key
         self.room_sym_key = None
         self.nonce = None
-        self.user_name = user_name
         self.user_id = None
         self.room_code = None
 
         self.connectButton.clicked.connect(self._join)
         self.connectButton_2.clicked.connect(self._create)
+
+
 
     def _join(self):
         code = self.Name.text().strip().upper()
