@@ -70,6 +70,58 @@ def _recv_encrypted(sock: socket.socket, sym_key: bytes, nonce: bytes) -> dict:
     return json.loads(plain.decode())
 
 
+ # ── Loading animation ────────────────────────────
+def create_loading_dialog(parent: QtWidgets.QWidget, text: str = "Connecting…") -> QtWidgets.QDialog:
+    """
+    Show a frameless, modal dialog with centered, larger text on a purple background.
+    Call .close() on it when your connect/handshake is done.
+    """
+    # Create a frameless, modal dialog
+    dlg = QtWidgets.QDialog(parent, flags=QtCore.Qt.FramelessWindowHint | QtCore.Qt.Dialog)
+    dlg.setModal(True)
+
+    dlg._movie = None
+
+
+    # Style sheet: purple background, rounded corners, white text
+    dlg.setStyleSheet(
+        """
+        QDialog {
+            background-color: #6a0dad;
+            border-radius: 12px;
+            
+        }
+        QLabel {
+            color: white;
+            
+        }
+        """
+    )
+
+    # Layout for text
+    layout = QtWidgets.QVBoxLayout(dlg)
+    layout.setContentsMargins(20, 20, 20, 20)
+    layout.setSpacing(10)
+
+
+    # Text label
+    label = QtWidgets.QLabel(text, dlg)
+    font = QtGui.QFont()
+    font.setPointSize(18)
+    font.setBold(True)
+    label.setFont(font)
+    label.setAlignment(QtCore.Qt.AlignCenter)
+    layout.addWidget(label, alignment=QtCore.Qt.AlignCenter)
+
+    # Adjust size to fit content
+    dlg.adjustSize()
+
+    # Show and process events to ensure rendering before blocking
+    dlg.show()
+    QtWidgets.QApplication.processEvents()
+
+    return dlg
+
 # ────────────────── device picker dialog ─────────────
 class DeviceSelectDialog(QtWidgets.QDialog):
     def __init__(self, parent=None):
@@ -173,6 +225,8 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
         # Save given room code.
         self.room_code = room_code
 
+        dlg = create_loading_dialog(self, "Connecting to room…")
+
         try:
             sock = socket.create_connection((SERVER_HOST, SERVER_PORT))
             public_key, private_key = generate_rsa_keypair()
@@ -253,6 +307,9 @@ class HomeWindow(QtWidgets.QMainWindow, Ui_home):
 
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Room Error", str(e))
+        finally:
+            #close the loading animation when done
+            dlg.close()
 
 
 
@@ -450,6 +507,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                           "from": self.user_id, "name": self.user_name,
                           "text": txt}, self.sym_key, self.nonce)
 
+
+
     #difterbute to helpers
     def _recv_loop(self):
         try:
@@ -463,8 +522,8 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
                     break
 
                 # For join/leave/status/chat, always update mapping
-                if "user_id" in msg and "name" in msg:
-                    self._user_names[msg["user_id"]] = msg["name"]
+                if "from" in msg and "name" in msg:
+                    self._user_names[msg["from"]] = msg["name"]
 
                 # Extract the message type
                 msg_type = msg.get("type")
@@ -614,7 +673,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             sender = self._user_names[sender]
         except KeyError:
             # If cant get name fall back to use ID
-            sender = sender
+            pass
 
 
         lbl = self._get_name_label(view)
@@ -663,6 +722,9 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
         lbl.move(view.x(), view.y() + view.height() - 24)
 
     def closeEvent(self, ev: QtGui.QCloseEvent):
+        #Close the room window and add a loading widget
+
+
         if not self._force_close:
             ans = QtWidgets.QMessageBox.question(
                 self, "Leave room",
@@ -672,6 +734,9 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             if ans == QtWidgets.QMessageBox.No:
                 ev.ignore()
                 return
+
+        dlg = create_loading_dialog(self, "Leaving Room...")
+
 
         # When user leaves, notify server, then jump back to Home
         try:
@@ -696,6 +761,7 @@ class ChatRoom(QtWidgets.QMainWindow, Ui_MainWindow):
             self.home_window.show()
 
             # Allow the QMainWindow to close
+            dlg.close()
             super().closeEvent(ev)
         except Exception as e:
             print("Error closing ChatRoom Window: ", e)
